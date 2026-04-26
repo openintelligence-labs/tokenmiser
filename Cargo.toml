@@ -1,0 +1,23 @@
+[package]
+name = "tokenmiser"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Smart LLM router that cuts agent costs by 10x. Drop-in OpenAI proxy."
+repository = "https://github.com/openintelligence-labs/tokenmiser"
+readme = "README.md"
+
+[dependencies]
+axum = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.37", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+
+[[bin]]
+name = "tokenmiser"
+path = "src/main.rs"
+
+[lib]
+name = "tokenmiser"
+path = "src/lib.rs"

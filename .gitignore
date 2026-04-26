@@ -1,0 +1,19 @@
+# architecture docs (uncooked — kept local until polished)
+docs/
+
+# Claude Code config (local-only)
+.claude/
+
+# CLAUDE.md (uncooked — kept local until polished)
+CLAUDE.md
+
+target/
+Cargo.lock.user
+*.pdb
+.DS_Store
+.idea/
+.vscode/
+.env
+.env.local
+*.log
+.claude/settings.local.json
