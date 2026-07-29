@@ -3,6 +3,16 @@
 //! Single-page UI, sub-100ms updates via 1s polling of `/stats`. No build
 //! step, no asset pipeline — the HTML is embedded in the binary so the
 //! `tokenmiser` daemon really is one file with the full v1.0 product.
+//! Fully offline: htmx is vendored into the binary (no CDN fetch).
+
+/// Vendored htmx 2.0.4 (`dist/htmx.min.js`), embedded so the dashboard works
+/// fully offline — the ecosystem's local-first / no-external-fetch rule.
+///
+/// Provenance: fetched from unpkg and jsdelivr (byte-identical), and the
+/// SHA-384 matches the official SRI hash htmx publishes for 2.0.4:
+///   sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+
+/// SHA-256: e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447
+pub const HTMX_JS: &str = include_str!("../assets/htmx.min.js");
 
 pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
@@ -10,7 +20,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 <meta charset="utf-8" />
 <title>TokenMiser — You saved $X today</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+<script src="/assets/htmx.js"></script>
 <style>
   :root {
     --bg: #0b0d10;
@@ -59,7 +69,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   <div class="footer">
     Set <code>x-tokenmiser-tenant: your-tenant-id</code> on requests to scope cache &amp; spend.
     Use <code>model: "auto"</code> for routing, <code>model: "tokenmiser:cascade"</code> for speculative cascade.
-    Docs: <a href="https://github.com/openintelligence-labs/tokenmiser">github.com/openintelligence-labs/tokenmiser</a>
+    Docs: <code>github.com/openintelligence-labs/tokenmiser</code>
   </div>
 </body>
 </html>
@@ -142,4 +152,46 @@ pub fn render_fragment(stats_json: &serde_json::Value) -> String {
 </div>
 "##,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Local-first invariant: the dashboard must work fully offline. No
+    /// external http(s) URLs anywhere in the served HTML — scripts, styles,
+    /// fonts, images, or links.
+    #[test]
+    fn dashboard_html_has_no_external_urls() {
+        assert!(
+            !DASHBOARD_HTML.contains("http://") && !DASHBOARD_HTML.contains("https://"),
+            "dashboard HTML must not reference external http(s) URLs"
+        );
+        assert!(
+            !DASHBOARD_HTML.contains("//unpkg.com") && !DASHBOARD_HTML.contains("//cdn."),
+            "dashboard HTML must not reference CDNs"
+        );
+    }
+
+    /// The live fragment htmx polls must also be offline-clean.
+    #[test]
+    fn dashboard_fragment_has_no_external_urls() {
+        let frag = render_fragment(&serde_json::json!({}));
+        assert!(
+            !frag.contains("http://") && !frag.contains("https://"),
+            "dashboard fragment must not reference external http(s) URLs"
+        );
+    }
+
+    /// The dashboard references htmx from the local route, and the vendored
+    /// asset is really htmx 2.0.4.
+    #[test]
+    fn htmx_is_vendored_and_served_locally() {
+        assert!(DASHBOARD_HTML.contains(r#"<script src="/assets/htmx.js"></script>"#));
+        assert!(
+            HTMX_JS.contains(r#"version:"2.0.4""#),
+            "vendored htmx must be 2.0.4"
+        );
+        assert!(HTMX_JS.len() > 10_000, "vendored htmx looks truncated");
+    }
 }

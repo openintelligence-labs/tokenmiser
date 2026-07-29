@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-07-29
+
+### Fixed
+
+- Dashboard is now fully offline: htmx 2.0.4 is vendored into the binary
+  (integrity-verified against the official SRI hash, byte-identical across
+  unpkg and jsdelivr) and served from the local `/assets/htmx.js` route
+  instead of being fetched from a CDN. Regression tests assert the dashboard
+  HTML and live fragment contain no external http(s) URLs.
+
 ## [0.5.0] - 2026-07-29
 
 First feature release. Rewrites the v0.1 single-crate skeleton as a 9-crate
@@ -63,5 +73,6 @@ Cargo workspace with a Pingora-based ingress.
 - Initial public release: difficulty classifier + routing logic, cost ledger
   with savings tracking, Axum HTTP server skeleton.
 
+[0.5.1]: https://github.com/openintelligence-labs/tokenmiser/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/openintelligence-labs/tokenmiser/compare/v0.0.1...v0.5.0
 [0.0.1]: https://github.com/openintelligence-labs/tokenmiser/releases/tag/v0.0.1

@@ -181,6 +181,10 @@ impl ProxyHttp for TokenmiserProxy {
                 send_html(session, 200, dashboard::DASHBOARD_HTML).await?;
                 Ok(true)
             }
+            ("GET", "/assets/htmx.js") => {
+                send_js(session, 200, dashboard::HTMX_JS).await?;
+                Ok(true)
+            }
             ("GET", "/dashboard/fragment") => {
                 let snap = self.state.ledger.snapshot();
                 let l1 = self.state.l1.stats();
@@ -934,6 +938,19 @@ async fn send_html(session: &mut Session, status: u16, body: &str) -> Result<()>
     let mut resp = ResponseHeader::build(status, None)?;
     resp.insert_header("content-type", "text/html; charset=utf-8")?;
     resp.insert_header("content-length", bytes.len().to_string())?;
+    session.write_response_header(Box::new(resp), false).await?;
+    session.write_response_body(Some(bytes), true).await?;
+    Ok(())
+}
+
+/// Serve an embedded JavaScript asset (vendored htmx — keeps the dashboard
+/// fully offline, no CDN fetch).
+async fn send_js(session: &mut Session, status: u16, body: &'static str) -> Result<()> {
+    let bytes = Bytes::from_static(body.as_bytes());
+    let mut resp = ResponseHeader::build(status, None)?;
+    resp.insert_header("content-type", "text/javascript; charset=utf-8")?;
+    resp.insert_header("content-length", bytes.len().to_string())?;
+    resp.insert_header("cache-control", "public, max-age=31536000, immutable")?;
     session.write_response_header(Box::new(resp), false).await?;
     session.write_response_body(Some(bytes), true).await?;
     Ok(())
