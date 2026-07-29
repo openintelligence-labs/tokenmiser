@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TokenMiser canonical pricing.json",
+  "type": "object",
+  "required": ["version", "updated", "currency", "units", "models"],
+  "properties": {
+    "version": { "type": "string", "description": "YYYY-MM stamp; bumped each upstream PR." },
+    "updated": { "type": "string", "format": "date" },
+    "source":  { "type": "string", "format": "uri" },
+    "currency": { "type": "string", "enum": ["USD"] },
+    "units":    { "type": "string", "enum": ["per 1M tokens"] },
+    "models": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["provider", "input", "output"],
+        "properties": {
+          "provider": { "type": "string" },
+          "family":   { "type": "string" },
+          "tier":     { "type": "string", "enum": ["frontier", "balanced", "fast"] },
+          "input":    { "type": "number", "minimum": 0 },
+          "output":   { "type": "number", "minimum": 0 },
+          "notes":    { "type": "string" }
+        }
+      }
+    }
+  }
+}

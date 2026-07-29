@@ -1,0 +1,24 @@
+[package]
+name = "tokenmiser-cache"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "L1 exact + L2 semantic cache for TokenMiser (v0.2-v0.3 work)."
+
+[dependencies]
+tokenmiser-config = { workspace = true }
+tokenmiser-providers = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+tokio = { workspace = true }
+parking_lot = { workspace = true }
+lru = { workspace = true }
+fastembed = { workspace = true }
+instant-distance = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }

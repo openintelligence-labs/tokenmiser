@@ -1,0 +1,35 @@
+[package]
+name = "tokenmiser-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Pingora-based OpenAI-compatible proxy ingress for TokenMiser."
+
+[dependencies]
+tokenmiser-config = { workspace = true }
+tokenmiser-providers = { workspace = true }
+tokenmiser-cache = { workspace = true }
+tokenmiser-cost = { workspace = true }
+tokenmiser-router = { workspace = true }
+tokenmiser-quality = { workspace = true }
+tokenmiser-mcp = { workspace = true }
+parking_lot = { workspace = true }
+
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+
+pingora = { workspace = true }
+pingora-core = { workspace = true }
+pingora-proxy = { workspace = true }
+pingora-http = { workspace = true }

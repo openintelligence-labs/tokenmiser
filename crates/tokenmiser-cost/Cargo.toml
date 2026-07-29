@@ -1,0 +1,16 @@
+[package]
+name = "tokenmiser-cost"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Cost tracking and ledger for TokenMiser (v0.2 expands this)."
+
+[dependencies]
+tokenmiser-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }

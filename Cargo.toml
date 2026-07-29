@@ -1,23 +1,88 @@
-[package]
-name = "tokenmiser"
-version = "0.1.0"
+[workspace]
+resolver = "2"
+members = [
+    "crates/tokenmiser",
+    "crates/tokenmiser-proxy",
+    "crates/tokenmiser-providers",
+    "crates/tokenmiser-cache",
+    "crates/tokenmiser-cost",
+    "crates/tokenmiser-router",
+    "crates/tokenmiser-config",
+    "crates/tokenmiser-quality",
+    "crates/tokenmiser-mcp",
+]
+
+[workspace.package]
+version = "0.5.0"
 edition = "2021"
 license = "MIT"
-description = "Smart LLM router that cuts agent costs by 10x. Drop-in OpenAI proxy."
 repository = "https://github.com/openintelligence-labs/tokenmiser"
-readme = "README.md"
+authors = ["Open Intelligence Labs"]
+rust-version = "1.80"
 
-[dependencies]
-axum = "0.7"
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# Pingora (proxy ingress)
+pingora = { version = "0.8", features = ["proxy", "rustls"] }
+pingora-core = "0.8"
+pingora-proxy = "0.8"
+pingora-http = "0.8"
+rustls = "0.23"
+
+# HTTP / admin endpoints
+axum = { version = "0.7", features = ["macros"] }
+http = "1.1"
+http-body-util = "0.1"
+bytes = "1.7"
+
+# HTTP client (upstream providers)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.37", features = ["full"] }
-reqwest = { version = "0.12", features = ["json"] }
+serde_yaml = "0.9"
 
-[[bin]]
-name = "tokenmiser"
-path = "src/main.rs"
+# Crypto / hashing
+sha2 = "0.10"
+hex = "0.4"
 
-[lib]
-name = "tokenmiser"
-path = "src/lib.rs"
+# Errors / logging
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Time
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+
+# In-process data structures
+parking_lot = "0.12"
+lru = "0.12"
+
+# Embeddings + ANN (L2 semantic cache, v0.3)
+fastembed = "5"
+instant-distance = "0.6"
+
+# Policy DSL (v0.9)
+rhai = { version = "1.21", features = ["sync"] }
+clap = { version = "4", features = ["derive"] }
+
+# Internal crates
+tokenmiser-config = { path = "crates/tokenmiser-config" }
+tokenmiser-providers = { path = "crates/tokenmiser-providers" }
+tokenmiser-cache = { path = "crates/tokenmiser-cache" }
+tokenmiser-cost = { path = "crates/tokenmiser-cost" }
+tokenmiser-router = { path = "crates/tokenmiser-router" }
+tokenmiser-proxy = { path = "crates/tokenmiser-proxy" }
+tokenmiser-quality = { path = "crates/tokenmiser-quality" }
+tokenmiser-mcp = { path = "crates/tokenmiser-mcp" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

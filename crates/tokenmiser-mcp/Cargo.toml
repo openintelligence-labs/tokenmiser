@@ -1,0 +1,18 @@
+[package]
+name = "tokenmiser-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "MCP gateway with per-tool budget caps (architecture §11.7)."
+
+[dependencies]
+tokenmiser-cost = { workspace = true }
+tokenmiser-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }

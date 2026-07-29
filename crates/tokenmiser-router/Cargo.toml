@@ -1,0 +1,22 @@
+[package]
+name = "tokenmiser-router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Difficulty classifier + model routing for TokenMiser."
+
+[dependencies]
+tokenmiser-config = { workspace = true }
+tokenmiser-providers = { workspace = true }
+tokenmiser-cache = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+fastembed = { workspace = true }
+anyhow = { workspace = true }
+rhai = { workspace = true }

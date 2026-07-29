@@ -1,0 +1,20 @@
+[package]
+name = "tokenmiser-quality"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Shadow A/B + LLM-as-judge auto-gate for TokenMiser (architecture §5)."
+
+[dependencies]
+tokenmiser-config = { workspace = true }
+tokenmiser-providers = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }

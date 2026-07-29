@@ -17,3 +17,8 @@ Cargo.lock.user
 .env.local
 *.log
 .claude/settings.local.json
+
+# fastembed model cache (downloaded on first L2 cache init)
+.fastembed_cache/
+# smoke-test config files (transient, generated per-session)
+config.smoke.yaml
