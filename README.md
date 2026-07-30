@@ -22,7 +22,7 @@ cd tokenmiser && cargo build --release
 ./target/release/tokenmiser        # proxy on :8443, dashboard at http://localhost:8443/
 ```
 
-Or grab a prebuilt binary from [Releases](https://github.com/openintelligence-labs/tokenmiser/releases).
+Or grab a prebuilt binary from [Releases](https://github.com/openintelligence-labs/tokenmiser/releases) — macOS (Apple Silicon + Intel) and Linux (x86_64 + aarch64) tarballs with `.sha256` checksums. Windows isn't supported yet (the Pingora ingress is unix-only); use WSL in the meantime.
 
 Point your OpenAI SDK at it:
 
