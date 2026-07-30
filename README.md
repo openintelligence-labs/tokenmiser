@@ -22,7 +22,7 @@ cd tokenmiser && cargo build --release
 ./target/release/tokenmiser        # proxy on :8443, dashboard at http://localhost:8443/
 ```
 
-Or grab a prebuilt binary from [Releases](https://github.com/openintelligence-labs/tokenmiser/releases) — macOS (Apple Silicon + Intel) and Linux (x86_64 + aarch64) tarballs with `.sha256` checksums. Windows isn't supported yet (the Pingora ingress is unix-only); use WSL in the meantime.
+Or grab a prebuilt binary from [Releases](https://github.com/openintelligence-labs/tokenmiser/releases) — macOS (Apple Silicon), Linux (x86_64 + aarch64), and an experimental Windows x64 build, each with a `.sha256` checksum. Intel macs are not covered yet — the embedding runtime (`ort`) ships no prebuilt ONNX Runtime for x64 macOS.
 
 Point your OpenAI SDK at it:
 
