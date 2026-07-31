@@ -73,14 +73,14 @@ rhai = { version = "1.21", features = ["sync"] }
 clap = { version = "4", features = ["derive"] }
 
 # Internal crates
-tokenmiser-config = { path = "crates/tokenmiser-config" }
-tokenmiser-providers = { path = "crates/tokenmiser-providers" }
-tokenmiser-cache = { path = "crates/tokenmiser-cache" }
-tokenmiser-cost = { path = "crates/tokenmiser-cost" }
-tokenmiser-router = { path = "crates/tokenmiser-router" }
-tokenmiser-proxy = { path = "crates/tokenmiser-proxy" }
-tokenmiser-quality = { path = "crates/tokenmiser-quality" }
-tokenmiser-mcp = { path = "crates/tokenmiser-mcp" }
+tokenmiser-config = { path = "crates/tokenmiser-config", version = "0.6.0" }
+tokenmiser-providers = { path = "crates/tokenmiser-providers", version = "0.6.0" }
+tokenmiser-cache = { path = "crates/tokenmiser-cache", version = "0.6.0" }
+tokenmiser-cost = { path = "crates/tokenmiser-cost", version = "0.6.0" }
+tokenmiser-router = { path = "crates/tokenmiser-router", version = "0.6.0" }
+tokenmiser-proxy = { path = "crates/tokenmiser-proxy", version = "0.6.0" }
+tokenmiser-quality = { path = "crates/tokenmiser-quality", version = "0.6.0" }
+tokenmiser-mcp = { path = "crates/tokenmiser-mcp", version = "0.6.0" }
 
 [profile.release]
 lto = "thin"
