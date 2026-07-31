@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-31
+
+### Added
+
+- Streamed responses are cached. `StreamAccumulator` reassembles SSE chunks
+  (UTF-8 safe across packet splits; LF, CRLF and CR terminators per WHATWG
+  HTML 9.2.5) and writes L1/L2 on clean completion only.
+- Concurrent identical requests are coalesced: the first miss computes
+  upstream, the rest await its result and are served as cache hits
+  (`x-tokenmiser-cache: coalesced`). A cold burst of 120 identical requests
+  drops from 120 upstream calls to 61.
+- Budget limits. Daily and total thresholds surface via `/stats`, an
+  `x-tokenmiser-budget` header and a structured log line. Warn-only by
+  default; enforce mode returns 402 for paid routes while cache hits and
+  local models always pass.
+- `GET /v1/models`, so `client.models.list()` works.
+- `security.allowed_origins` for browser apps that need cross-origin access.
+
+### Fixed
+
+- Cache hits on `stream: true` returned a JSON body instead of a stream,
+  breaking OpenAI SDK clients. They now replay as simulated chunk streams.
+- The semantic cache could answer a different question: `Multiply 3 by 11`
+  matched a cached `Add 25 and 30` at cosine 0.876, and the hit seeded L1 so
+  the wrong answer persisted. Candidates whose number literals differ are now
+  skipped before scoring. Raising the threshold cannot fix this — genuine
+  paraphrases score 0.92-0.97, above the false positive.
+- A `response_format: json_object` request could be served cached prose.
+  Answer-shaping parameters are part of the semantic entry fingerprint.
+- The exact cache key ignored `max_tokens` and `top_p`, so a truncated
+  response could be replayed to a caller asking for more. Transport-only
+  fields stay out of the key so stream and non-stream callers share entries.
+- The SSE parser only recognised LF terminators; a spec-legal CRLF provider
+  produced no cache writes and no usage accounting.
+- The keepalive probe could splice a comment into a partially forwarded
+  event, corrupting the client's parse.
+- In-band `data: {"error": ...}` events no longer cache partial content.
+- The proxy defaulted to `0.0.0.0` with no authentication, exposing an
+  endpoint that spends API budget to the local network. It binds `127.0.0.1`
+  and warns on any non-loopback bind.
+- Browser pages could drive completions via CORS simple requests. Requests
+  carrying `Sec-Fetch-Site: cross-site` or a disallowed `Origin` are
+  rejected; CLI and SDK callers are unaffected.
+- Request bodies are capped at 8 MiB. Twelve concurrent uploads previously
+  drove RSS from 21 MB to 322 MB.
+- The tenant map is bounded at 256 entries with LRU eviction and tenant ids
+  are sanitised; the header is client-supplied and reached cache keys and
+  logs.
+- Ollama models tagged `*-cloud` run remotely and are no longer reported as
+  free. They count as remote requests with `unpriced_requests` in `/stats`,
+  since per-token rates are not published.
+- `HEAD` requests returned 404 on every route (RFC 9110 9.3.2).
+- Test policy files collided between parallel threads within one clock tick.
+
 ## [0.5.1] - 2026-07-29
 
 ### Fixed
