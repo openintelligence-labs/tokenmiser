@@ -1,7 +1,4 @@
-//! TokenMiser main daemon.
-//!
-//! Loads config, builds the provider registry + cost ledger, auto-detects a
-//! local Ollama if present, and launches the Pingora ingress.
+//! TokenMiser daemon entry point.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,9 +78,8 @@ fn policy_test(log: PathBuf, policy: PathBuf) -> Result<()> {
 }
 
 fn serve() -> Result<()> {
-    // Required because we enable Pingora's rustls feature; rustls 0.23+ won't
-    // pick a CryptoProvider by default when more than one is potentially in
-    // the dep graph. We default to aws-lc-rs which Pingora pulls in.
+    // rustls 0.23+ refuses to pick a CryptoProvider when several could be in
+    // the dep graph; aws-lc-rs is the one Pingora pulls in.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let cfg = load_config()?;
@@ -94,8 +90,26 @@ fn serve() -> Result<()> {
         "starting tokenmiser"
     );
 
-    // Async setup happens on a Tokio runtime built explicitly so the Pingora
-    // server can take over the main thread afterward.
+    // No authentication, so a LAN-reachable listener lets anyone on the
+    // network spend the operator's API budget and read /stats.
+    for (what, addr) in [
+        ("proxy", &cfg.listen.proxy_addr),
+        ("admin", &cfg.listen.admin_addr),
+    ] {
+        if is_non_loopback_bind(addr) {
+            tracing::warn!(
+                target: "tokenmiser::security",
+                surface = what,
+                addr = %addr,
+                "listening on a non-loopback address with NO authentication: anyone who can \
+                 reach this port can spend your API budget and read /stats. Bind 127.0.0.1 \
+                 unless you intend network-wide exposure."
+            );
+        }
+    }
+
+    // Built explicitly so the Pingora server can take over the main thread
+    // once async setup finishes.
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -103,10 +117,8 @@ fn serve() -> Result<()> {
 
     let mut registry = ProviderRegistry::from_config(&cfg);
 
-    // Auto-detect a running Ollama on localhost — the local-first hook in
-    // architecture §7. Soft-fail if absent. Returns the list of loaded
-    // models so we can update the default routing policy to point at one
-    // that's actually installed.
+    // Soft-fail if absent. The returned model list is what points the default
+    // routing policy at a model that is actually installed.
     let detected_ollama: Vec<String> = rt.block_on(async {
         let probe = ProviderConfig::ollama_local();
         match OllamaProvider::detect(&probe.base_url).await {
@@ -128,17 +140,15 @@ fn serve() -> Result<()> {
         }
     });
 
-    // Register the configured Ollama client regardless — the registry's
-    // resolver will route `ollama:` and `llama*` traffic to it once a model
-    // is loaded later, without a daemon restart.
+    // Registered even when undetected, so a model loaded later starts serving
+    // `ollama:` traffic without a daemon restart.
     let ollama = Arc::new(OllamaProvider::new(ProviderConfig::ollama_local()));
     registry.register("ollama".into(), ollama as Arc<dyn Provider>);
 
     let ledger = CostLedger::new(PricingTable::canonical());
 
-    // Build the Tier1 semantic classifier. Falls back to None on failure
-    // (which means auto-routing degrades to pure Tier0 heuristic — still
-    // useful, never blocks startup).
+    // On failure auto-routing degrades to the Tier0 heuristic rather than
+    // blocking startup.
     let tier1 = match Tier1Classifier::new() {
         Ok(t) => Some(t),
         Err(e) => {
@@ -148,17 +158,10 @@ fn serve() -> Result<()> {
     };
 
     let mut policy = RoutingPolicy::default();
-    // v0.6: if a local Ollama model is detected, prefer it for Easy
-    // difficulty (the zero-config local-first hook from architecture §7).
-    //
-    // Walk the preferred list in priority order — the *first preferred
-    // keyword* that any installed model matches wins, not the first
-    // installed model that happens to match any keyword. This avoids
-    // picking gemma when qwen/llama are available, since gemma's
-    // reasoning-mode output leaves `message.content` empty on simple
-    // prompts (real bug observed against gemma4:latest).
-    //
-    // Also exclude reasoning-mode and embedding-only models.
+    // Iterate keywords in the outer loop so the first *preferred keyword* with
+    // any installed match wins, rather than the first installed model matching
+    // any keyword. Otherwise gemma can win over qwen/llama, and gemma's
+    // reasoning-mode output leaves `message.content` empty on simple prompts.
     let exclude = ["embed", "reasoning", "-thinking"];
     let preferred = [
         "qwen2.5", "llama3", "llama2", "mistral", "phi3", "qwen", "phi", "gemma",
@@ -182,9 +185,7 @@ fn serve() -> Result<()> {
     }
     let router = Router::new(policy, tier1);
 
-    // v0.8: shadow A/B is only meaningful when a frontier API key is
-    // available — without one, the judge can't be called. Soft-skip if
-    // ANTHROPIC_API_KEY is absent.
+    // Shadow A/B needs a frontier key to call the judge.
     let registry_arc = Arc::new(ProviderRegistry::from_config(&cfg));
     let shadow = if std::env::var("ANTHROPIC_API_KEY").is_ok() {
         let cfg = ShadowConfig::default();
@@ -204,8 +205,6 @@ fn serve() -> Result<()> {
     server.run_forever();
 }
 
-// Unreachable but the explicit Ok keeps the type signature uniform with the
-// `Command::Policy` arm above.
 #[allow(dead_code)]
 fn _serve_returns_ok() -> Result<()> {
     Ok(())
@@ -216,6 +215,20 @@ fn init_tracing() {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,pingora=warn"));
     fmt().with_env_filter(filter).compact().init();
+}
+
+/// True when `addr` is reachable from off-host. Unparseable addresses count as
+/// non-loopback, so an unrecognized bind warns rather than staying silent.
+fn is_non_loopback_bind(addr: &str) -> bool {
+    let host = match addr.rsplit_once(':') {
+        Some((h, _)) => h.trim_start_matches('[').trim_end_matches(']'),
+        None => addr,
+    };
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => !ip.is_loopback(),
+        // Of the hostnames, only `localhost` is definitely loopback.
+        Err(_) => !host.eq_ignore_ascii_case("localhost"),
+    }
 }
 
 fn load_config() -> Result<TokenmiserConfig> {
@@ -231,5 +244,50 @@ fn load_config() -> Result<TokenmiserConfig> {
         Ok(cfg)
     } else {
         Ok(TokenmiserConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_binds_do_not_warn() {
+        for a in [
+            "127.0.0.1:8443",
+            "127.0.0.1:9443",
+            "localhost:8443",
+            "[::1]:8443",
+            "127.5.5.5:1",
+        ] {
+            assert!(!is_non_loopback_bind(a), "{a} must be treated as loopback");
+        }
+    }
+
+    #[test]
+    fn exposed_binds_warn() {
+        for a in [
+            "0.0.0.0:8443",
+            "192.168.1.10:8443",
+            "[::]:8443",
+            "0.0.0.0:1",
+        ] {
+            assert!(is_non_loopback_bind(a), "{a} must be flagged as exposed");
+        }
+    }
+
+    #[test]
+    fn default_config_binds_loopback_only() {
+        let cfg = TokenmiserConfig::default();
+        assert!(
+            !is_non_loopback_bind(&cfg.listen.proxy_addr),
+            "default proxy_addr must be loopback, got {}",
+            cfg.listen.proxy_addr
+        );
+        assert!(
+            !is_non_loopback_bind(&cfg.listen.admin_addr),
+            "default admin_addr must be loopback, got {}",
+            cfg.listen.admin_addr
+        );
     }
 }
