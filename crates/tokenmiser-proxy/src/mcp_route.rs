@@ -1,18 +1,8 @@
-//! HTTP routes for the MCP budget gateway (architecture §11.7).
+//! HTTP routes for the MCP budget gateway.
 //!
-//! Endpoints:
-//! - `POST /v1/mcp/tools/call` — JSON-RPC-shaped tool invocation. We
-//!   enforce the per-(agent, tool) budget cap before forwarding (v0.95.1
-//!   will add actual upstream forwarding once we ship an MCP client; v0.95
-//!   exposes the budget-check + post-call cost reporting surface so agent
-//!   frameworks can integrate today).
-//! - `POST /v1/mcp/budgets` — set per-(agent, tool) caps at runtime.
-//! - `GET  /v1/mcp/budgets` — snapshot per-(agent, tool) spend.
-//!
-//! Wire shape is intentionally JSON-RPC 2.0 (`{"jsonrpc":"2.0","method":"tools/call",...}`)
-//! so MCP clients can point at this endpoint directly. We ignore the
-//! `params.arguments` field for budget purposes — the cap is on the
-//! identity (agent, tool), not the argument content.
+//! The wire shape is JSON-RPC 2.0 so MCP clients can point at these endpoints
+//! directly. `params.arguments` is ignored: the cap is on the (agent, tool)
+//! identity, not the argument content.
 
 use serde::{Deserialize, Serialize};
 use tokenmiser_mcp::ToolBudget;
@@ -33,17 +23,13 @@ pub struct McpToolsCallParams {
     pub name: String,
     #[serde(default)]
     pub arguments: serde_json::Value,
-    /// `tokenmiser`-specific extension: which agent is calling. Defaults
-    /// to `"default"` for clients that don't set it.
+    /// TokenMiser extension naming the calling agent.
     #[serde(default)]
     pub agent: Option<String>,
-    /// Optional: estimated cost in USD this call will incur. If supplied,
-    /// we pre-check against the cap. v0.95.2 will integrate token-count
-    /// estimation here.
+    /// Estimated USD cost, pre-checked against the cap when supplied.
     #[serde(default)]
     pub estimated_cost_usd: Option<f64>,
-    /// Optional: actual cost (filled in on the second call by clients that
-    /// want post-hoc reporting).
+    /// Actual USD cost, for clients doing post-hoc reporting.
     #[serde(default)]
     pub actual_cost_usd: Option<f64>,
 }
@@ -73,8 +59,7 @@ pub struct McpError {
     pub message: String,
 }
 
-/// JSON-RPC error codes we use. The MCP spec reserves -32000..-32099 for
-/// server-implementation-defined errors.
+/// The MCP spec reserves -32000..-32099 for server-defined errors.
 pub const ERR_BUDGET_EXCEEDED: i32 = -32001;
 pub const ERR_BAD_REQUEST: i32 = -32600;
 

@@ -1,11 +1,5 @@
-//! `tokenmiser policy test` — replay logged requests against a candidate
-//! Rhai policy file and print the projected routing delta.
-//!
-//! The daemon (when configured with `request_log_path`) writes one JSON
-//! line per request: `{ "ts": ..., "model": "...", "tenant": "...",
-//! "messages": [...] }`. Replay reads that file, runs each request through
-//! the candidate policy, and tallies how many would have routed differently
-//! plus the projected cost delta if you have a `pricing` table available.
+//! Backs `tokenmiser policy test`: replays a JSONL request log through a
+//! candidate Rhai policy and tallies the projected routing distribution.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -22,7 +16,7 @@ pub struct ReplayResult {
     pub by_target: HashMap<String, u64>,
     pub failed: u64,
     pub by_tenant: HashMap<String, u64>,
-    /// Unix-seconds range covered by the replayed entries, if any carried a `ts`.
+    /// Unix-seconds range covered by entries carrying a `ts`.
     pub time_range: Option<(i64, i64)>,
 }
 
@@ -102,13 +96,11 @@ pub fn replay_filtered<P: AsRef<Path>>(
 
 #[derive(Debug, Deserialize)]
 struct LogEntry {
-    /// Unix-seconds when this request was logged. Optional so we accept
-    /// hand-written test fixtures without a timestamp.
+    /// Optional so hand-written fixtures need no timestamp.
     #[serde(default)]
     ts: Option<i64>,
     model: String,
-    /// Tenant the request was scoped to. Honored by the policy when set so
-    /// `req.tenant` in Rhai scripts reflects production reality.
+    /// Scoping tenant, exposed to Rhai scripts as `req.tenant`.
     #[serde(default)]
     tenant: Option<String>,
     messages: Vec<serde_json::Value>,
@@ -185,7 +177,7 @@ mod tests {
             r.by_target.get("anthropic::claude-opus-4-7").copied(),
             Some(1)
         );
-        // ts + tenant now actually drive replay output:
+        // ts and tenant drive replay output.
         assert_eq!(r.by_tenant.get("t-a").copied(), Some(1));
         assert_eq!(r.by_tenant.get("t-b").copied(), Some(1));
         assert_eq!(r.time_range, Some((1700000000, 1700000100)));

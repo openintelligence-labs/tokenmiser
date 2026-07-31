@@ -1,13 +1,9 @@
-//! Per-connection outbound backpressure (architecture §14.4).
+//! Per-connection outbound backpressure.
 //!
-//! A slow client streaming a frontier-model response can balloon outbound
-//! buffers and crash the proxy. Pingora handles inbound flow control; the
-//! outbound path needs explicit accounting because we're proxying.
-//!
-//! Token-bucket: each connection starts with `burst_bytes` and refills at
-//! `refill_bytes_per_sec`. `take()` returns the number of bytes the caller
-//! may write right now; if the bucket is empty we sleep until enough has
-//! accrued. Cheap and correct.
+//! Pingora handles inbound flow control, but the proxied outbound path needs
+//! explicit accounting or a slow client streaming a frontier response can
+//! balloon buffers. Each connection gets a token bucket starting at
+//! `burst_bytes` and refilling at `refill_bytes_per_sec`.
 
 use std::time::{Duration, Instant};
 
@@ -19,7 +15,7 @@ pub struct TokenBucket {
 }
 
 impl TokenBucket {
-    /// Default per-architecture-§14.4: 1MB burst, 256KB/s sustained.
+    /// 1MB burst, 256KB/s sustained.
     pub fn default_streaming() -> Self {
         Self::new(1024.0 * 1024.0, 256.0 * 1024.0)
     }
@@ -42,9 +38,8 @@ impl TokenBucket {
         }
     }
 
-    /// Async: wait until at least `n` bytes are available, then debit and
-    /// return. Yields to the runtime in small steps so a stalled bucket
-    /// doesn't busy-wait.
+    /// Wait until `n` bytes are available, then debit them. Yields in small
+    /// steps so a stalled bucket does not busy-wait.
     pub async fn acquire(&mut self, n: usize) {
         let needed = n as f64;
         loop {

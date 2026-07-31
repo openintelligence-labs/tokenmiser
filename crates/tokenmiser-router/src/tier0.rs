@@ -1,14 +1,6 @@
-//! Tier 0 heuristic prefilter (architecture §3).
-//!
-//! Sub-microsecond classification using cheap signals:
-//! - prompt char/word length
-//! - structural-edit keywords (refactor, implement, design, debug, …) → Hard
-//! - trivial-Q keywords (what is, summarize, translate, …) → Easy
-//! - JSON-mode flag → tends toward Medium (structured outputs benefit from
-//!   slightly stronger models in practice)
-//!
-//! Goal: classify ~30% of traffic confidently so Tier 1 only runs on the
-//! ambiguous middle band. Anything else falls to Medium and gets handed up.
+//! Tier 0 heuristic prefilter over prompt length, keywords and the JSON-mode
+//! flag. Classifies the confident extremes so Tier 1 only runs on the
+//! ambiguous middle band; anything undecided falls through as Medium.
 
 use tokenmiser_providers::ChatRequest;
 
@@ -57,8 +49,8 @@ pub fn tier0_difficulty(req: &ChatRequest) -> Difficulty {
     let lower = total.to_lowercase();
     let word_count = total.split_whitespace().count();
 
-    // Very long prompts: lean Hard regardless of keywords. Frontier models
-    // still beat cheap models on long-context comprehension.
+    // Very long prompts lean Hard regardless of keywords: frontier models
+    // still beat cheap ones on long-context comprehension.
     if word_count > 500 {
         return Difficulty::Hard;
     }

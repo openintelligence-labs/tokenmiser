@@ -1,17 +1,9 @@
-//! Routing: classify prompt difficulty, pick a model.
+//! Classify prompt difficulty and pick a model.
 //!
-//! Architecture §3 specifies a 4-tier router. v0.4 ships Tier 0 + Tier 1.
-//! - **Tier 0** (`tier0.rs`): pure-Rust heuristic, sub-microsecond. Cheap
-//!   length/keyword/role/JSON-mode signals. Confidently classifies ~30% of
-//!   traffic.
-//! - **Tier 1** (`tier1.rs`): exemplar-based semantic classifier using the
-//!   same bge-small-en-v1.5 embedder the L2 cache loaded. We embed a
-//!   curated set of difficulty exemplars at startup; at request time we
-//!   embed the prompt and pick the nearest cluster. Drop-in slot for
-//!   future RouteLLM ONNX weights.
-//!
-//! v0.5 (speculative cascade) and v0.6+ (unified Cascade Routing per
-//! architecture §14.1) hang off the same `RouteDecision` shape.
+//! Tier 0 (`tier0.rs`) is a sub-microsecond heuristic over length, keyword,
+//! role and JSON-mode signals. Tier 1 (`tier1.rs`) is an exemplar-based
+//! semantic classifier sharing the L2 cache's bge-small embedder, used when
+//! Tier 0 is not decisive.
 
 use serde::{Deserialize, Serialize};
 use tokenmiser_providers::ChatRequest;
@@ -39,19 +31,18 @@ pub enum Difficulty {
     Hard,
 }
 
-/// Final routing decision: what model to call, why we picked it, and
-/// (if relevant) which model to use as the counterfactual for cost
-/// accounting + shadow A/B (v0.8).
+/// What model to call, why, and the counterfactual model used for cost
+/// accounting and shadow A/B.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteDecision {
     pub target: RoutingTarget,
     pub difficulty: Difficulty,
     pub tier: RouteTier,
-    /// Architecture §14.3 reasoning trace — populated in v1.1.
+    /// Reasoning trace; not yet populated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
-    /// Model we'd have called if we routed everything to the frontier;
-    /// drives the "saved $X" counterfactual ledger.
+    /// The model a frontier-only route would have called; drives the
+    /// counterfactual savings ledger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counterfactual_model: Option<String>,
 }
@@ -59,7 +50,7 @@ pub struct RouteDecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RouteTier {
-    /// Caller explicitly named a model — no classification done.
+    /// Caller named a model; no classification ran.
     Explicit,
     /// Tier 0 heuristic was sufficient.
     Heuristic,
@@ -78,21 +69,19 @@ impl Router {
         Self { policy, tier1 }
     }
 
-    /// Look up the policy target for a difficulty band (used by the v0.5
-    /// cascade path to pick its cheap/frontier endpoints).
+    /// The policy target for a difficulty band.
     pub fn policy_target(&self, d: Difficulty) -> RoutingTarget {
         self.policy.choose(d)
     }
 
-    /// Decide where to send `req`. Honors caller intent if the requested
-    /// model is unambiguous (anything other than `auto` / `tokenmiser:auto`).
+    /// Decide where to send `req`, honoring an explicitly named model.
     pub fn decide(&self, req: &ChatRequest) -> RouteDecision {
         let requested = req.model.as_str();
         let auto = requested == "auto" || requested == "tokenmiser:auto";
 
         if !auto {
-            // Caller picked a specific model; respect it but still record
-            // difficulty so /stats remains rich.
+            // Respect the caller's model but still classify, so /stats keeps
+            // reporting difficulty.
             let difficulty = tier0_difficulty(req);
             return RouteDecision {
                 target: RoutingTarget::passthrough(requested),
@@ -103,7 +92,7 @@ impl Router {
             };
         }
 
-        // Auto-routing: Tier 0 first, then Tier 1 if Tier 0 isn't decisive.
+        // Tier 0 first, Tier 1 only when Tier 0 is not decisive.
         let t0 = tier0_difficulty(req);
         let (difficulty, tier) = match (t0, &self.tier1) {
             (Difficulty::Medium, Some(t1)) => (t1.classify(req), RouteTier::Semantic),

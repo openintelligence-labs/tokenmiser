@@ -122,7 +122,10 @@ fn threshold_sweep() {
 
     let mut best: (f32, f32) = (0.0, 0.0); // (threshold, F1)
     for &t in &thresholds {
-        let cache = L2Cache::new(t, Duration::from_secs(3600), 1024).expect("L2 init");
+        // Guard disabled here on purpose: the sweep measures the raw
+        // semantic layer; the numeric guard is benchmarked by the live
+        // regression tests in `l2.rs`.
+        let cache = L2Cache::new(t, Duration::from_secs(3600), 1024, false).expect("L2 init");
 
         let mut tp = 0; // hit on positive (correct)
         let mut fp = 0; // hit on negative (wrong — semantic false positive)

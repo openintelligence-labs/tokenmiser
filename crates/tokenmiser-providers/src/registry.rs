@@ -1,11 +1,6 @@
-//! Provider registry — resolves a model name to a concrete `Provider` impl.
-//!
-//! Resolution order (v0.1, will be enriched by the router in v0.4+):
-//! 1. Static alias in `routing.aliases` (config-driven)
-//! 2. `provider:model` prefix in the model name (e.g. `anthropic:claude-…`)
-//! 3. Heuristic: name starts with `claude-` → anthropic; `gpt-` → openai;
-//!    `llama` / `qwen` / `mistral` / `phi` → ollama; etc.
-//! 4. `routing.default_provider`
+//! Resolves a model name to a concrete `Provider`, in order: configured
+//! alias, `provider:model` prefix, model-family heuristic, then the opt-in
+//! `routing.default_provider`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -64,21 +59,21 @@ impl ProviderRegistry {
 
     /// Pick a provider + real model name for an incoming `model` request.
     pub fn resolve(&self, model: &str) -> Result<(Arc<dyn Provider>, String), ProviderError> {
-        // 1. Explicit alias.
+        // Explicit alias.
         if let Some((provider_name, real_model)) = self.aliases.get(model) {
             if let Some(p) = self.providers.get(provider_name) {
                 return Ok((p.clone(), real_model.clone()));
             }
         }
 
-        // 2. `provider:model` prefix.
+        // `provider:model` prefix.
         if let Some((prefix, rest)) = model.split_once(':') {
             if let Some(p) = self.providers.get(prefix) {
                 return Ok((p.clone(), rest.to_string()));
             }
         }
 
-        // 3. Heuristic by family.
+        // Model-family heuristic.
         let lower = model.to_lowercase();
         let guess: Option<&str> = if lower.starts_with("claude") {
             Some("anthropic")
@@ -105,13 +100,9 @@ impl ProviderRegistry {
             }
         }
 
-        // 4. Default provider — opt-in only, via `routing.default_provider`.
-        //
-        // We deliberately do NOT fall through to a guessed default. Previous
-        // behavior silently routed unknown model names (typos, unsupported
-        // models) to whatever provider was first in the config, which then
-        // 401'd on a missing API key — confusing for users who never asked
-        // for that provider. Explicit opt-in keeps error messages honest.
+        // Opt-in only: falling through to a guessed default would route
+        // typos and unsupported models to an arbitrary configured provider,
+        // which then fails with an unrelated missing-API-key error.
         if let Some(name) = &self.default_provider {
             if let Some(p) = self.providers.get(name) {
                 return Ok((p.clone(), model.to_string()));
@@ -132,8 +123,7 @@ fn build_provider(cfg: ProviderConfig) -> Arc<dyn Provider> {
         ProviderKind::OpenAI | ProviderKind::DeepSeek => Arc::new(OpenAIProvider::new(cfg)),
         ProviderKind::Anthropic => Arc::new(AnthropicProvider::new(cfg)),
         ProviderKind::Ollama => Arc::new(OllamaProvider::new(cfg)),
-        // Gemini handled the same as OpenAI for v0.1 (its OpenAI-compat layer
-        // is reasonable enough that we'll do a dedicated client in v0.7).
+        // Gemini goes through its OpenAI-compatibility layer.
         ProviderKind::Gemini => Arc::new(OpenAIProvider::new(cfg)),
     }
 }
@@ -164,6 +154,8 @@ mod tests {
                 default_provider: Some("openai".into()),
             },
             cache: Default::default(),
+            budget: Default::default(),
+            security: Default::default(),
         }
     }
 

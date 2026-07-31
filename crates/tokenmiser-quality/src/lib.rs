@@ -1,16 +1,8 @@
-//! Shadow A/B + LLM-as-judge + auto-gate (architecture §5).
+//! Shadow A/B with an LLM judge.
 //!
-//! For X% of routed traffic (default 1%):
-//! 1. Capture the request + the cheap-model response we already returned.
-//! 2. Async-call the frontier model with the same request.
-//! 3. Async-call a judge model: "given prompt P, which response is better,
-//!    A or B?" with positions randomized.
-//! 4. Tally per-segment win rate; emit regression alert + auto-reroute if
-//!    a segment's cheap-model win rate drops below the floor.
-//!
-//! v0.8 ships the aggregator + the shadow scheduler + the judge prompt. The
-//! actual auto-gate "rewrite policy in place" call is a one-line hook into
-//! `RoutingPolicy::tiers.insert()`, gated behind config `quality.auto_gate`.
+//! A sampled fraction of routed traffic is replayed against the frontier model
+//! in the background, a judge scores the pair, and per-segment win rates are
+//! tallied so a regressed segment can raise an alert.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,14 +20,14 @@ pub use scheduler::ShadowScheduler;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShadowConfig {
-    /// Fraction of traffic to shadow-test, in [0.0, 1.0]. 0.01 = 1%.
+    /// Fraction of traffic to shadow-test, in [0.0, 1.0].
     pub sample_rate: f32,
     /// Which model to use as the frontier baseline in shadow tests.
     pub frontier_model: String,
-    /// Which model is the rotated judge. v0.8 fixes it; v0.9 rotates.
+    /// Model used as the judge.
     pub judge_model: String,
-    /// If cheap-model win rate over the last `min_samples_per_segment`
-    /// drops below this, mark the segment "regressed" and emit an alert.
+    /// Cheap-model win rate below this over `min_samples_per_segment` marks
+    /// the segment regressed.
     pub auto_gate_floor: f32,
     pub min_samples_per_segment: u32,
 }
@@ -132,9 +124,8 @@ impl WinRateAggregator {
     }
 }
 
-/// Helper: classify a request into a coarse segment for aggregation.
-/// v0.8 uses a simple "first user message first 6 words" bucket; v0.9 will
-/// reuse the Tier-1 classifier's exemplar clustering for sharper segments.
+/// Bucket a request into a coarse aggregation segment, keyed on the opening
+/// words of its first user message.
 pub fn segment_of(req: &ChatRequest) -> String {
     let user_text = req
         .messages
@@ -176,11 +167,10 @@ impl ShadowEnqueue {
     }
 }
 
-// Surface the registry type so consumers don't need a second import.
+// Surfaced so consumers need no second import.
 pub use tokenmiser_providers::ProviderRegistry as Registry;
 
-/// Reusable info-log helper for sample completion (the dashboard subscribes
-/// to these via `tracing` in v1.0).
+/// Log a completed shadow sample.
 pub fn log_sample(sample: &ShadowSample) {
     info!(
         segment = %sample.segment,
@@ -191,7 +181,7 @@ pub fn log_sample(sample: &ShadowSample) {
     );
 }
 
-// Re-export so callers can construct a registry-like Arc without an extra import.
+// Re-exported so callers can build the Arc without an extra import.
 pub use std::sync::Arc as ArcReexport;
 
 #[cfg(test)]
@@ -225,7 +215,7 @@ mod tests {
             auto_gate_floor: 0.45,
             ..Default::default()
         });
-        // 1 cheap win, 3 frontier wins — cheap win rate = 0.25, below 0.45.
+        // Cheap win rate of 0.25 is below the 0.45 floor.
         for v in [
             JudgeVerdict::A,
             JudgeVerdict::B,
