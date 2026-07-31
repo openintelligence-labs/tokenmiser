@@ -1,15 +1,11 @@
-//! Built-in htmx dashboard served by Pingora itself (architecture §11.3).
-//!
-//! Single-page UI, sub-100ms updates via 1s polling of `/stats`. No build
-//! step, no asset pipeline — the HTML is embedded in the binary so the
-//! `tokenmiser` daemon really is one file with the full v1.0 product.
-//! Fully offline: htmx is vendored into the binary (no CDN fetch).
+//! Built-in htmx dashboard, embedded in the binary and served by Pingora.
+//! No build step, no asset pipeline, no external fetches.
 
 /// Vendored htmx 2.0.4 (`dist/htmx.min.js`), embedded so the dashboard works
-/// fully offline — the ecosystem's local-first / no-external-fetch rule.
+/// offline.
 ///
-/// Provenance: fetched from unpkg and jsdelivr (byte-identical), and the
-/// SHA-384 matches the official SRI hash htmx publishes for 2.0.4:
+/// Provenance: fetched from unpkg and jsdelivr (byte-identical); the SHA-384
+/// matches the official SRI hash htmx publishes for 2.0.4:
 ///   sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+
 /// SHA-256: e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447
 pub const HTMX_JS: &str = include_str!("../assets/htmx.min.js");
@@ -54,6 +50,11 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
   .card-value { font-size: 32px; font-weight: 600; font-variant-numeric: tabular-nums;
                 margin-top: 6px; }
   .card-sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .note { margin-top: 16px; padding: 12px 14px; border-radius: 8px; font-size: 13px;
+          line-height: 1.5; color: var(--warn); background: rgba(240,136,62,0.08);
+          border: 1px solid rgba(240,136,62,0.35); }
+  .note code { font-size: 12px; }
+  .unpriced { color: var(--warn); }
   .footer { color: var(--muted); font-size: 12px; margin-top: 24px; }
   a { color: var(--accent); text-decoration: none; }
 </style>
@@ -75,8 +76,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 </html>
 "#;
 
-/// Render the live fragment that htmx polls. Takes a serialized stats blob
-/// (from the existing /stats endpoint shape).
+/// Render the live fragment htmx polls, from a `/stats`-shaped blob.
 pub fn render_fragment(stats_json: &serde_json::Value) -> String {
     let cost = stats_json.get("cost");
     let saved = cost
@@ -108,6 +108,14 @@ pub fn render_fragment(stats_json: &serde_json::Value) -> String {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
 
+    // When non-zero, `spent_usd` is a lower bound on the real bill and the
+    // card must say so, rather than folding unpriced paid calls into a
+    // "$0.0000 spent" figure.
+    let unpriced = cost
+        .and_then(|c| c.get("unpriced_requests"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
     let l1 = stats_json.get("cache_l1");
     let l1_hits = l1
         .and_then(|c| c.get("hits"))
@@ -129,6 +137,28 @@ pub fn render_fragment(stats_json: &serde_json::Value) -> String {
         0.0
     };
 
+    // Sub-label under "Spent", stating what the number excludes.
+    let spent_sub = if unpriced > 0 {
+        format!(
+            r#"<span class="unpriced">at least — {unpriced} unpriced remote request{s}</span>"#,
+            s = if unpriced == 1 { "" } else { "s" },
+        )
+    } else {
+        "to upstream providers".to_string()
+    };
+    // Only shown when there is something to disclose.
+    let unpriced_note = if unpriced > 0 {
+        format!(
+            r#"<div class="note">⚠ {unpriced} request{s} went to a remote model with no
+       published per-token price (e.g. an Ollama Cloud <code>*-cloud</code> tag).
+       Those are counted as remote, but their cost is <strong>unknown</strong> and is
+       not included above — treat “Spent” and “You saved” as lower/upper bounds.</div>"#,
+            s = if unpriced == 1 { "" } else { "s" },
+        )
+    } else {
+        String::new()
+    };
+
     format!(
         r##"
 <div class="hero">
@@ -148,8 +178,9 @@ pub fn render_fragment(stats_json: &serde_json::Value) -> String {
     <div class="card-sub">bge-small-en-v1.5</div></div>
   <div class="card"><div class="card-label">Spent</div>
     <div class="card-value">${spent:.4}</div>
-    <div class="card-sub">to upstream providers</div></div>
+    <div class="card-sub">{spent_sub}</div></div>
 </div>
+{unpriced_note}
 "##,
     )
 }
@@ -158,9 +189,8 @@ pub fn render_fragment(stats_json: &serde_json::Value) -> String {
 mod tests {
     use super::*;
 
-    /// Local-first invariant: the dashboard must work fully offline. No
-    /// external http(s) URLs anywhere in the served HTML — scripts, styles,
-    /// fonts, images, or links.
+    /// The dashboard must work offline: no external http(s) URLs anywhere in
+    /// the served HTML.
     #[test]
     fn dashboard_html_has_no_external_urls() {
         assert!(
@@ -183,8 +213,44 @@ mod tests {
         );
     }
 
-    /// The dashboard references htmx from the local route, and the vendored
-    /// asset is really htmx 2.0.4.
+    /// An unpriced remote call must be disclosed, not folded into a
+    /// `$0.0000 spent` figure.
+    #[test]
+    fn unpriced_requests_are_disclosed_on_the_dashboard() {
+        let frag = render_fragment(&serde_json::json!({
+            "cost": { "spent_usd": 0.0, "unpriced_requests": 3, "requests_total": 3 }
+        }));
+        assert!(frag.contains("unpriced remote request"));
+        assert!(
+            frag.contains("unknown"),
+            "the note must say the cost is unknown, not zero"
+        );
+        assert!(frag.contains('3'), "the count must be shown");
+    }
+
+    /// And stays out of the way entirely when everything is priced.
+    #[test]
+    fn no_unpriced_note_when_all_requests_are_priced() {
+        let frag = render_fragment(&serde_json::json!({
+            "cost": { "spent_usd": 1.5, "unpriced_requests": 0, "requests_total": 10 }
+        }));
+        assert!(!frag.contains("unpriced"));
+        assert!(frag.contains("to upstream providers"));
+    }
+
+    /// A dashboard that says "1 requests" undermines trust in the numbers
+    /// next to it.
+    #[test]
+    fn unpriced_note_is_grammatical_for_one_request() {
+        let frag = render_fragment(&serde_json::json!({
+            "cost": { "spent_usd": 0.0, "unpriced_requests": 1 }
+        }));
+        assert!(frag.contains("1 unpriced remote request<"));
+        assert!(!frag.contains("1 unpriced remote requests"));
+    }
+
+    /// htmx is referenced from the local route and the vendored asset is
+    /// really htmx 2.0.4.
     #[test]
     fn htmx_is_vendored_and_served_locally() {
         assert!(DASHBOARD_HTML.contains(r#"<script src="/assets/htmx.js"></script>"#));

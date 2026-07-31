@@ -1,15 +1,11 @@
-//! Routing policy: maps Difficulty → concrete (provider, model) target.
-//!
-//! v0.4 keeps the policy purely declarative (struct + YAML). The Rhai DSL
-//! (architecture §11.5 / v0.9 milestone) lands later and slots into the
-//! same `RoutingPolicy::choose()` seam.
+//! Maps a `Difficulty` to a concrete (provider, model) target.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::Difficulty;
 
-/// A concrete routing target — provider name and the actual model id to send.
+/// A provider name and the model id to send it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingTarget {
     pub provider: String,
@@ -17,9 +13,8 @@ pub struct RoutingTarget {
 }
 
 impl RoutingTarget {
-    /// Pass through the model the user explicitly requested. Provider field
-    /// stays empty — the registry's own resolution (heuristic, alias, prefix)
-    /// takes over.
+    /// Pass the requested model through with an empty provider, leaving
+    /// resolution to the registry.
     pub fn passthrough(model: &str) -> Self {
         Self {
             provider: String::new(),
@@ -31,8 +26,7 @@ impl RoutingTarget {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingPolicy {
     pub tiers: HashMap<Difficulty, RoutingTarget>,
-    /// Counterfactual frontier model used for "saved $X" accounting on
-    /// every routed-cheaper request.
+    /// Frontier model used for counterfactual savings accounting.
     pub frontier_model: String,
 }
 
@@ -43,10 +37,8 @@ impl Default for RoutingPolicy {
             Difficulty::Easy,
             RoutingTarget {
                 provider: "ollama".into(),
-                // qwen2.5:7b is the most commonly-installed Ollama model in
-                // late-2026 surveys; users can override via YAML policy file.
-                // The auto-detect path in main.rs may update this with a
-                // model that's actually loaded at startup (v0.6 work).
+                // Overridable via the YAML policy; startup auto-detection may
+                // replace this with a model that is actually installed.
                 model: "ollama:qwen2.5:7b".into(),
             },
         );

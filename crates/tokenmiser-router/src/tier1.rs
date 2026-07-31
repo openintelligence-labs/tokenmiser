@@ -1,18 +1,10 @@
-//! Tier 1: semantic-exemplar classifier (architecture §3).
+//! Tier 1 semantic classifier: difficulty exemplars are embedded at startup
+//! with the same `bge-small-en-v1.5` model the L2 cache loads, and a request
+//! takes the difficulty of its nearest exemplar.
 //!
-//! v0.4 ships an exemplar-based classifier as the drop-in slot for future
-//! RouteLLM ONNX weights (architecture §14.2 / v1.2 milestone). It works
-//! by embedding a curated set of difficulty exemplars at startup using
-//! the same `bge-small-en-v1.5` model already loaded for the L2 cache,
-//! then at request time embedding the prompt and assigning the difficulty
-//! of the nearest exemplar's cluster.
-//!
-//! This isn't as accurate as a fine-tuned classifier (RouteLLM claims ~85%
-//! accuracy; this is closer to ~70-75% on the same benchmark), but it has
-//! zero extra dependencies, runs on the existing embedder, and the
-//! architecture is identical to v1.2 — when ONNX weights drop we swap the
-//! `Tier1Classifier::classify()` body and the rest of the system is
-//! unchanged.
+//! Less accurate than a fine-tuned classifier, but it adds no dependencies and
+//! reuses the existing embedder. Swapping in trained weights is a change to
+//! `classify()` alone.
 
 use anyhow::{anyhow, Result};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
@@ -117,8 +109,8 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     dot / (na.sqrt() * nb.sqrt())
 }
 
-/// Curated exemplar set covering the three difficulty bands. Kept small so
-/// startup-embed time is <100ms; will be replaced by RouteLLM weights in v1.2.
+/// Exemplars for the three difficulty bands, kept small to bound startup
+/// embedding time.
 fn default_exemplars() -> Vec<(&'static str, Difficulty)> {
     vec![
         // EASY: short factual queries, simple transforms.

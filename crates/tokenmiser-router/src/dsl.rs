@@ -1,25 +1,17 @@
-//! Rhai-scripted routing policy (architecture §11.5).
+//! Rhai-scripted routing policy.
 //!
-//! Users author `policy.rhai` files that map request shape → routing
-//! target. A minimal script looks like:
+//! A `policy.rhai` file defines `fn route(req)` returning
+//! `#{ provider, model }`. `req` is a `RequestView` exposing `word_count`,
+//! `model`, `tenant`, `has_keyword(s)` and `prompt()`.
 //!
 //! ```rhai
-//! // Route extremely long prompts to the frontier; everything else to
-//! // the cheapest local model.
 //! fn route(req) {
 //!     if req.word_count > 500 {
 //!         return #{ provider: "anthropic", model: "claude-opus-4-7" };
 //!     }
-//!     if req.has_keyword("refactor") || req.has_keyword("debug") {
-//!         return #{ provider: "anthropic", model: "claude-haiku-4-5" };
-//!     }
 //!     #{ provider: "ollama", model: "ollama:qwen2.5:7b" }
 //! }
 //! ```
-//!
-//! The script gets a single argument: a `RequestView` exposing
-//! `word_count`, `model`, `tenant`, `has_keyword(s)`, and the user-message
-//! text via `prompt()`. Hot-reload is built in (`PolicyEngine::reload`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -82,8 +74,8 @@ impl PolicyEngine {
         let mut engine = Engine::new();
         engine.set_max_expr_depths(64, 64);
 
-        // Register `has_keyword` as a free function so scripts can call
-        // `req.has_keyword("refactor")` ergonomically.
+        // Registered as a free function so scripts can call it as
+        // `req.has_keyword("refactor")`.
         engine.register_fn("has_keyword", |req: Map, kw: &str| -> bool {
             req.get("prompt")
                 .and_then(|d| d.clone().into_string().ok())
@@ -167,12 +159,22 @@ mod tests {
         path
     }
 
+    /// Unique suffix for temp policy files. A timestamp alone collides
+    /// between parallel test threads within one clock tick, letting one test
+    /// truncate another's policy mid-load; the PID separates processes and the
+    /// counter separates threads.
     fn rand_suffix() -> String {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-            .to_string()
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        format!(
+            "{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed),
+        )
     }
 
     #[test]

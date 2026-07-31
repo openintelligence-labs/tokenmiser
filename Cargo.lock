@@ -4163,6 +4163,7 @@ name = "tokenmiser-cost"
 version = "0.5.1"
 dependencies = [
  "chrono",
+ "parking_lot",
  "serde",
  "serde_json",
  "tokenmiser-config",

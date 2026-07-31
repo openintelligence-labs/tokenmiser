@@ -1,9 +1,6 @@
-//! Upstream provider clients.
-//!
-//! Every provider speaks a different wire shape; we normalize to the
-//! OpenAI `chat/completions` shape both inbound and outbound. The trait
-//! `Provider` is the single seam — proxy code never branches on provider
-//! kind, it just calls `complete()`.
+//! Upstream provider clients, normalized to the OpenAI `chat/completions`
+//! wire shape in both directions. `Provider` is the single seam: proxy code
+//! never branches on provider kind.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -17,7 +14,7 @@ pub mod registry;
 
 pub use registry::ProviderRegistry;
 
-/// Canonical (OpenAI-shaped) chat completion request that flows through the gateway.
+/// Canonical OpenAI-shaped chat completion request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub model: String,
@@ -30,7 +27,7 @@ pub struct ChatRequest {
     pub top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
-    /// Pass-through for anything we don't model yet (tools, response_format, …).
+    /// Pass-through for unmodeled fields (`tools`, `response_format`, …).
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -44,7 +41,7 @@ pub struct ChatMessage {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Canonical (OpenAI-shaped) chat completion response.
+/// Canonical OpenAI-shaped chat completion response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub id: String,
@@ -55,7 +52,7 @@ pub struct ChatResponse {
     pub model: String,
     pub choices: Vec<ChatChoice>,
     pub usage: Usage,
-    /// Anything the upstream returned that we didn't model yet.
+    /// Unmodeled fields returned by the upstream.
     #[serde(flatten, default)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -70,17 +67,15 @@ pub struct ChatChoice {
     pub message: ChatMessage,
     #[serde(default)]
     pub finish_reason: Option<String>,
-    /// Provider-emitted token logprobs. Used by the cascade Tier 2 router
-    /// to score cheap-model confidence. Passed through opaque to clients.
+    /// Token logprobs, scored by the cascade router for cheap-model
+    /// confidence and passed through to clients opaquely.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logprobs: Option<serde_json::Value>,
 }
 
-/// True if the response's visible `message.content` is empty/whitespace.
-/// Reasoning-mode models (gemma4, deepseek-r1, gpt-oss thinking variants)
-/// can emit all tokens into a `reasoning` field and leave content blank —
-/// from the caller's perspective that's a broken response, even if the
-/// model "succeeded" technically.
+/// True when the visible `message.content` is empty or whitespace.
+/// Reasoning-mode models can emit every token into a `reasoning` field and
+/// leave content blank, which is a broken response to the caller.
 pub fn response_visible_content_empty(resp: &ChatResponse) -> bool {
     let Some(choice) = resp.choices.first() else {
         return true;
@@ -129,14 +124,12 @@ pub enum ProviderError {
     Malformed(String),
 }
 
-/// A single SSE event from an upstream provider. We pass these through to
-/// the client as-is for v0.7; cross-provider normalization (Anthropic
-/// content_block_delta → OpenAI delta.content) lands in a v0.7.1 iteration.
+/// A single SSE event from an upstream provider, passed to the client as-is.
 #[derive(Debug, Clone)]
 pub enum StreamChunk {
-    /// Raw SSE bytes (typically `data: {...}\n\n`).
+    /// Raw SSE bytes, typically `data: {...}\n\n`.
     Sse(bytes::Bytes),
-    /// End-of-stream marker; sent after the upstream closes naturally.
+    /// Sent after the upstream closes naturally.
     Done,
 }
 
@@ -146,9 +139,9 @@ pub trait Provider: Send + Sync {
     fn config(&self) -> &ProviderConfig;
     async fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError>;
 
-    /// Streaming variant. Default impl falls back to non-streaming `complete()`
-    /// and emits the full response as one SSE chunk — providers that natively
-    /// stream override this. Returns a boxed stream of chunks.
+    /// Streaming variant. The default falls back to `complete()` and emits
+    /// the whole response as one SSE chunk; natively streaming providers
+    /// override this.
     async fn stream(
         &self,
         req: &ChatRequest,
@@ -156,7 +149,7 @@ pub trait Provider: Send + Sync {
         futures::stream::BoxStream<'static, Result<StreamChunk, ProviderError>>,
         ProviderError,
     > {
-        // Fallback: call complete(), wrap the response as one SSE chunk.
+        // Wrap the non-streaming response as a single SSE chunk.
         let resp = self.complete(req).await?;
         let json = serde_json::to_vec(&resp)?;
         let mut sse = b"data: ".to_vec();

@@ -1,8 +1,4 @@
-//! LLM-as-judge: pairwise preference scoring.
-//!
-//! The judge prompt is intentionally simple and position-randomized to
-//! reduce A/B bias. Architecture §5 calls for a rotated judge; v0.8 fixes
-//! the judge model and v0.9 rotates across a pool.
+//! LLM-as-judge pairwise preference scoring.
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -18,9 +14,8 @@ pub enum JudgeVerdict {
     Tie,
 }
 
-/// Build the judge prompt. We always present cheap first, then frontier;
-/// to combat A/B positional bias we sometimes invert order at the call site
-/// and remap the result. v0.8 keeps order fixed for simplicity.
+/// Build the judge prompt, presenting the cheap response first. Callers may
+/// invert the order and remap the result to counter positional bias.
 fn judge_prompt(prompt: &str, a: &str, b: &str) -> Vec<ChatMessage> {
     let system =
         "You are an impartial judge comparing two assistant responses to the same user prompt. \
@@ -46,7 +41,7 @@ Which response is better? Reply A, B, or T."
     ]
 }
 
-/// Run a judge call. Resolves `judge_model` via the registry.
+/// Run a judge call, resolving `judge_model` through the registry.
 pub async fn judge(
     registry: &ProviderRegistry,
     judge_model: &str,
@@ -86,7 +81,7 @@ fn parse_verdict(resp: &ChatResponse) -> JudgeVerdict {
         })
         .unwrap_or_default();
 
-    // Look for first A/B/T character that isn't part of "the" or similar.
+    // First standalone A/B/T character, skipping ones inside words.
     for c in text.chars() {
         match c {
             'A' => return JudgeVerdict::A,
@@ -98,7 +93,7 @@ fn parse_verdict(resp: &ChatResponse) -> JudgeVerdict {
     JudgeVerdict::Tie
 }
 
-// Suppress unused-import warning when the file is read in isolation.
+// Suppress the unused-import warning when this file is read in isolation.
 #[allow(dead_code)]
 fn _provider_typecheck(_: Arc<dyn Provider>) {}
 

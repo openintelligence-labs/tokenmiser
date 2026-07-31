@@ -1,19 +1,7 @@
-//! MCP gateway with per-tool budget caps (architecture §11.7).
+//! MCP gateway enforcing per-(agent, tool) budget caps.
 //!
-//! What's shipping in v0.95:
-//! - **Budget tracker**: per-(agent, tool) spend ledger with hard caps.
-//! - **HTTP endpoint** (wired into the proxy admin server in v1.0):
-//!   `POST /v1/mcp/tools/call` accepts a JSON-RPC `tools/call` payload,
-//!   checks the per-tool budget, forwards to the wrapped MCP server, and
-//!   records the actual cost from the response.
-//!
-//! What's NOT shipping in v0.95 (deferred to v0.95.1):
-//! - Full MCP server spec compliance (initialize / capabilities / etc).
-//!   The gateway speaks the tool-call subset only.
-//! - Bidirectional stdio MCP — HTTP only.
-//!
-//! The architectural moat is the **per-tool budget caps**. Every agent
-//! framework wants this; nobody else ships it for OSS MCP yet.
+//! Speaks the JSON-RPC `tools/call` subset over HTTP only — not the full MCP
+//! server spec, and no stdio transport.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -40,7 +28,7 @@ pub enum BudgetError {
 pub struct ToolBudget {
     /// Maximum USD this (agent, tool) tuple may spend in this window.
     pub cap_usd: f64,
-    /// Window length in seconds (0 = lifetime).
+    /// Window length in seconds; 0 means lifetime.
     pub window_secs: u64,
 }
 
@@ -62,11 +50,11 @@ pub struct ToolSpend {
 }
 
 pub struct McpBudgetGateway {
-    /// (agent, tool) → budget config.
+    /// Per-(agent, tool) budget config.
     budgets: Mutex<HashMap<(String, String), ToolBudget>>,
-    /// (agent, tool) → current spend.
+    /// Per-(agent, tool) current spend.
     spend: Mutex<HashMap<(String, String), ToolSpend>>,
-    /// Default budget for any (agent, tool) without an explicit config.
+    /// Applied to any (agent, tool) without an explicit config.
     default_budget: ToolBudget,
 }
 
@@ -85,8 +73,8 @@ impl McpBudgetGateway {
             .insert((agent.to_string(), tool.to_string()), b);
     }
 
-    /// Check if a call is allowed. Returns the current spend snapshot on
-    /// the allowed path or a `BudgetError` if the cap is breached.
+    /// Check whether a call is allowed, returning the current spend snapshot
+    /// or a `BudgetError` when the cap is breached.
     pub fn check(&self, agent: &str, tool: &str) -> Result<ToolSpend, BudgetError> {
         let key = (agent.to_string(), tool.to_string());
         let budget = self
@@ -134,8 +122,7 @@ impl McpBudgetGateway {
         Ok(spend.clone())
     }
 
-    /// Record the cost of a completed tool call. Call this *after* the
-    /// upstream returns, with the actual spend.
+    /// Record the cost of a completed tool call, after the upstream returns.
     pub fn record(&self, agent: &str, tool: &str, cost_usd: f64) {
         let key = (agent.to_string(), tool.to_string());
         let mut spend_map = self.spend.lock();
@@ -177,7 +164,7 @@ mod tests {
             g.check("agent-a", "search").unwrap();
             g.record("agent-a", "search", 0.02);
         }
-        // Now spent = 0.10, next check should deny.
+        // Spend is now at the cap.
         assert!(g.check("agent-a", "search").is_err());
     }
 
@@ -198,7 +185,7 @@ mod tests {
         g.check("agent-a", "expensive_tool").unwrap();
         g.record("agent-a", "expensive_tool", 0.06);
         assert!(g.check("agent-a", "expensive_tool").is_err());
-        // Different tool still allowed via default.
+        // A different tool is still allowed under the default budget.
         g.check("agent-a", "cheap_tool").unwrap();
     }
 
