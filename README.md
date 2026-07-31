@@ -4,41 +4,55 @@
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](https://www.rust-lang.org)
 [![Release](https://img.shields.io/github/v/release/openintelligence-labs/tokenmiser)](https://github.com/openintelligence-labs/tokenmiser/releases)
 
-> **Smart LLM router that cuts agent costs by 10x.** Drop-in OpenAI-compatible proxy. Routes simple queries to cheap/local models, hard ones to frontier. Dual-layer semantic caching, real-time cost dashboard, shadow-mode quality A/B.
+> **A local proxy that cuts your LLM bill.** Point your OpenAI SDK at it and it routes easy work to free local models, serves repeats and near-repeats from cache, and collapses duplicate concurrent calls into one — while showing you exactly what you spent and saved.
 
-⭐ **Star us on GitHub** if your monthly LLM bill makes you wince.
-
-## Why this exists
-
-LiteLLM does basic routing. Portkey is closed source. Nothing combines routing + semantic caching + cost tracking + quality comparison in one open source tool. TokenMiser is that tool — a Rust proxy you put in front of your LLM calls. One import change, instant savings.
-
-Local-by-default: with zero API keys, TokenMiser auto-detects a running [Ollama](https://ollama.com) and routes easy traffic to it for free. Add provider keys when you want frontier models. No telemetry, ever.
+![TokenMiser dashboard: 8 requests, 3 served from cache, $0 spent upstream](./assets/dashboard.png)
 
 ## Quick start
 
 ```bash
-git clone https://github.com/openintelligence-labs/tokenmiser
-cd tokenmiser && cargo build --release
-./target/release/tokenmiser        # proxy on :8443, dashboard at http://localhost:8443/
+cargo install tokenmiser        # or: download a binary from Releases
+tokenmiser serve                # proxy on :8443, dashboard at http://localhost:8443/
 ```
 
-Or grab a prebuilt binary from [Releases](https://github.com/openintelligence-labs/tokenmiser/releases) — macOS (Apple Silicon), Linux (x86_64 + aarch64), and an experimental Windows x64 build, each with a `.sha256` checksum. Intel macs are not covered yet — the embedding runtime (`ort`) ships no prebuilt ONNX Runtime for x64 macOS.
-
-Point your OpenAI SDK at it:
+Change one line in your app:
 
 ```python
 from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8443/v1", api_key="unused")
-resp = client.chat.completions.create(
-    model="auto",  # let the router pick — or pass any provider model id
-    messages=[{"role": "user", "content": "hello"}],
-)
 ```
 
-Streaming works the same way — `stream=True` responses pass through as SSE,
-get cached when they finish, and cached answers replay as a simulated stream.
-`client.models.list()` returns the router pseudo-models plus every installed
-Ollama model.
+That's the whole integration. With [Ollama](https://ollama.com) running you need no API keys at all — TokenMiser detects it and routes there for free. Add provider keys when you want frontier models.
+
+Prebuilt binaries for macOS (Apple Silicon), Linux (x86_64 + aarch64) and Windows x64 are on the [Releases](https://github.com/openintelligence-labs/tokenmiser/releases) page, each with a `.sha256`. Intel macs must build from source — the embedding runtime (`ort`) ships no prebuilt ONNX Runtime for x64 macOS.
+
+## What it actually saves
+
+Measured on the repo's load battery (242 requests, 120-way concurrency, mixed streaming and non-streaming, against local Ollama):
+
+| | |
+|---|---|
+| Cached response latency | **p50 0.29 ms** (vs. 275 ms uncached) |
+| Upstream calls on a 120-request identical burst | **61**, not 120 — the rest coalesced |
+| Proxy overhead on a cache miss | below run-to-run variance of the model itself |
+| Memory under sustained load | flat, ~262 MB |
+
+Your savings depend entirely on your traffic: repetitive agent loops and RAG workloads with recurring questions benefit most; every-request-unique traffic benefits least. The dashboard tells you which you have rather than asking you to guess.
+
+## Why this exists
+
+LiteLLM does routing. Portkey is closed source. Nothing open source combines routing, semantic caching, honest cost accounting and quality comparison in one binary you run yourself. TokenMiser is a Rust proxy that does — local-by-default, no signup, no telemetry, ever.
+
+## Using it
+
+Pass `model="auto"` to let the router choose, or name any provider model
+directly. `model="tokenmiser:cascade"` tries a cheap model first and escalates
+only if the answer looks weak.
+
+`stream=True` works as usual: chunks pass through as SSE, the finished response
+is cached, and a later cache hit replays as a stream rather than a single
+blob. `client.models.list()` returns the router pseudo-models plus every
+installed Ollama model.
 
 Every response carries routing headers so you can audit each decision:
 
@@ -190,9 +204,9 @@ bill, and the dashboard says so.
 
 ## Part of the Open Intelligence Labs ecosystem
 
-- [actants](https://github.com/openintelligence-labs/actants) — TokenMiser is the default LLM layer
-- [AgentTrace](https://github.com/openintelligence-labs/agenttrace) — cost data feeds into trace cost attribution
-- [DeepDive](https://github.com/openintelligence-labs/deepdive) — first consumer to use routing for search vs. analysis
+- [actants](https://github.com/openintelligence-labs/actants) — local-first agent SDK; TokenMiser sits under it as the LLM layer
+- [DeepDive](https://github.com/openintelligence-labs/deepdive) — research agent that routes search and analysis differently
+- [PhantomDep](https://github.com/openintelligence-labs/phantomdep) — blocks hallucinated dependencies before they install
 
 ## Contributing
 
