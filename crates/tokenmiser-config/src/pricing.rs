@@ -1,6 +1,4 @@
-//! Canonical pricing table — the April 2026 snapshot from
-//! `docs/ARCHITECTURE.md` §6. The intent is to publish this as
-//! `tokenmiser/pricing` so other gateways sync from us (architecture §11.4 moat).
+//! Canonical per-model pricing table.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,15 +27,14 @@ impl ModelPricing {
     }
 }
 
-/// In-memory canonical pricing table. Backed by `pricing.json` at deploy time;
-/// hard-coded here so the v0.1 build is self-contained.
+/// Backed by `pricing.json` at deploy time; the canonical table is hard-coded
+/// so the build stays self-contained.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PricingTable {
     pub models: HashMap<String, ModelPricing>,
 }
 
 impl PricingTable {
-    /// April 2026 canonical pricing from architecture doc §6.
     pub fn canonical() -> Self {
         let mut models = HashMap::new();
 
@@ -72,9 +69,28 @@ impl PricingTable {
         self.models.get(model)
     }
 
-    /// True if this model is free at the point of use (i.e. local Ollama).
+    /// True when this model executes on the operator's own hardware.
+    ///
+    /// Ollama Cloud tags are not free: they look local (same daemon, same API,
+    /// an `ollama:` prefix) but generate tokens on a paid account. See
+    /// [`Self::is_ollama_cloud`].
     pub fn is_free(model: &str) -> bool {
+        if Self::is_ollama_cloud(model) {
+            return false;
+        }
         model.starts_with("ollama:") || model == "local"
+    }
+
+    /// True for an Ollama model whose tag ends in `-cloud`, which executes
+    /// remotely on a paid account.
+    ///
+    /// Matching is on the tag (after the last `:`), so a local model merely
+    /// named `cloudy-llama:7b` is unaffected. Case-insensitive, as Ollama tags
+    /// are.
+    pub fn is_ollama_cloud(model: &str) -> bool {
+        let stripped = model.strip_prefix("ollama:").unwrap_or(model);
+        let tag = stripped.rsplit(':').next().unwrap_or_default();
+        tag.len() > "-cloud".len() && tag.to_ascii_lowercase().ends_with("-cloud")
     }
 }
 
@@ -92,8 +108,7 @@ mod tests {
 
     #[test]
     fn cost_calculation_is_correct() {
-        // Opus 4.7: $5/M input, $25/M output.
-        // 1k input + 500 output → $0.005 + $0.0125 = $0.0175
+        // $5/M input + $25/M output over 1k + 500 tokens.
         let p = ModelPricing::new(5.00, 25.00);
         let cost = p.cost_usd(1_000, 500);
         assert!((cost - 0.0175).abs() < 1e-9);
@@ -104,5 +119,40 @@ mod tests {
         assert!(PricingTable::is_free("ollama:llama3.2"));
         assert!(PricingTable::is_free("local"));
         assert!(!PricingTable::is_free("gpt-5"));
+    }
+
+    #[test]
+    fn ollama_cloud_tags_are_not_free() {
+        for m in [
+            "gpt-oss:20b-cloud",
+            "ollama:gpt-oss:20b-cloud",
+            "ollama:deepseek-v3.1:671b-cloud",
+            "ollama:qwen3-coder:480b-cloud",
+            "GPT-OSS:120B-CLOUD",
+        ] {
+            assert!(PricingTable::is_ollama_cloud(m), "{m} must be cloud");
+            assert!(!PricingTable::is_free(m), "{m} must not be free");
+        }
+    }
+
+    #[test]
+    fn local_models_named_cloud_are_still_free() {
+        for m in [
+            "ollama:llama3.2",
+            "ollama:qwen2.5:7b",
+            "ollama:cloudy-llama:7b",
+            "ollama:nimbus-cloud-chat:7b",
+            "ollama:cloud",
+            "local",
+        ] {
+            assert!(!PricingTable::is_ollama_cloud(m), "{m} must not be cloud");
+        }
+        assert!(PricingTable::is_free("ollama:cloudy-llama:7b"));
+        assert!(PricingTable::is_free("ollama:qwen2.5:7b"));
+    }
+
+    #[test]
+    fn bare_cloud_tag_is_not_treated_as_cloud() {
+        assert!(!PricingTable::is_ollama_cloud("ollama:model:-cloud"));
     }
 }
