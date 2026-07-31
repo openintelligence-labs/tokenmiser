@@ -1,11 +1,5 @@
-//! Cache layer.
-//!
-//! v0.2: `L1Cache` — exact-match LRU keyed by sha256(model || system ||
-//! normalized user msg || tools || temp bucket || tenant). TTL bounded.
-//!
-//! v0.3: `L2Cache` — semantic, bge-small-en-v1.5 + cosine, per-tenant
-//! namespace, threshold 0.87 by default (empirically tuned, see
-//! `threshold_bench`).
+//! Two-layer cache: `L1Cache` is an exact-match TTL LRU, `L2Cache` is a
+//! per-tenant semantic cache over bge-small embeddings.
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -29,12 +23,8 @@ struct Entry {
     inserted_at: Instant,
 }
 
-/// L1 exact-match cache (architecture §4).
-///
-/// Capacity-bounded LRU with per-entry TTL. Thread-safe via `parking_lot::Mutex`
-/// — the critical section is microseconds (hash lookup + clone), so contention
-/// is acceptable at v0.2 scale. v0.3 will move to a sharded structure if
-/// benchmarks show this is a bottleneck.
+/// Exact-match cache: a capacity-bounded LRU with per-entry TTL. A single
+/// mutex suffices because the critical section is a hash lookup plus a clone.
 pub struct L1Cache {
     inner: Mutex<LruCache<String, Entry>>,
     ttl: Duration,
@@ -53,19 +43,35 @@ impl L1Cache {
         })
     }
 
+    /// Look up an exact-match entry.
+    ///
+    /// Every call is counted exactly once, as a hit or a miss, so
+    /// `hits + misses == lookups` always holds. Callers must not count misses
+    /// themselves.
     pub fn lookup(&self, req: &ChatRequest, tenant: &str) -> Option<ChatResponse> {
         let k = exact_key(req, tenant);
         let mut guard = self.inner.lock();
-        let entry = guard.get(&k)?;
-        if entry.inserted_at.elapsed() > self.ttl {
-            guard.pop(&k);
-            self.misses
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return None;
+        let found = match guard.get(&k) {
+            Some(entry) if entry.inserted_at.elapsed() <= self.ttl => Some(entry.response.clone()),
+            Some(_) => {
+                // Evict now rather than waiting for LRU pressure.
+                guard.pop(&k);
+                None
+            }
+            None => None,
+        };
+        drop(guard);
+        match found {
+            Some(resp) => {
+                self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Some(resp)
+            }
+            None => {
+                self.misses
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
         }
-        let resp = entry.response.clone();
-        self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Some(resp)
     }
 
     pub fn insert(&self, req: &ChatRequest, tenant: &str, resp: &ChatResponse) {
@@ -78,11 +84,6 @@ impl L1Cache {
                 inserted_at: Instant::now(),
             },
         );
-    }
-
-    pub fn record_miss(&self) {
-        self.misses
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn stats(&self) -> CacheStats {
@@ -171,5 +172,57 @@ mod tests {
         c.insert(&req("hello"), "tenant-a", &resp("world"));
         std::thread::sleep(Duration::from_millis(80));
         assert!(c.lookup(&req("hello"), "tenant-a").is_none());
+    }
+
+    #[test]
+    fn every_lookup_is_counted_exactly_once() {
+        let c = L1Cache::new(8, Duration::from_millis(50));
+        c.insert(&req("hello"), "tenant-a", &resp("world"));
+
+        assert!(c.lookup(&req("hello"), "tenant-a").is_some()); // hit
+        assert!(c.lookup(&req("nope"), "tenant-a").is_none()); // miss (absent)
+        assert!(c.lookup(&req("hello"), "tenant-b").is_none()); // miss (tenant)
+        std::thread::sleep(Duration::from_millis(80));
+        assert!(c.lookup(&req("hello"), "tenant-a").is_none()); // miss (expired)
+
+        let s = c.stats();
+        assert_eq!(s.hits, 1);
+        assert_eq!(s.misses, 3);
+        assert_eq!(s.hits + s.misses, 4, "hits+misses must equal lookups");
+    }
+
+    #[test]
+    fn concurrent_lookups_and_inserts_keep_stats_consistent() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let c = L1Cache::new(1024, Duration::from_secs(60));
+        let lookups = Arc::new(AtomicU64::new(0));
+
+        std::thread::scope(|s| {
+            for t in 0..8 {
+                let c = Arc::clone(&c);
+                let lookups = Arc::clone(&lookups);
+                s.spawn(move || {
+                    for i in 0..500 {
+                        let r = req(&format!("prompt-{}", i % 50));
+                        if c.lookup(&r, "tenant").is_none() {
+                            c.insert(&r, "tenant", &resp("cached"));
+                        }
+                        lookups.fetch_add(1, Ordering::Relaxed);
+                        // Vary interleaving across threads.
+                        if i % 100 == t {
+                            std::thread::yield_now();
+                        }
+                    }
+                });
+            }
+        });
+
+        let s = c.stats();
+        assert_eq!(
+            s.hits + s.misses,
+            lookups.load(Ordering::Relaxed),
+            "hits+misses must equal total lookups under concurrency"
+        );
+        assert!(s.size <= 50);
     }
 }
