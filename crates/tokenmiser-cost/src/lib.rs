@@ -6,12 +6,38 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokenmiser_config::PricingTable;
 
+/// Fixed-point scale for stored spend: USD * 1e12 (pico-dollars).
+///
+/// Micro-dollars are too coarse to be the unit of account. A single
+/// gpt-4o-mini call of 14 prompt + 1 completion tokens costs $0.0000027,
+/// which truncates to $0.000002 — a 26% under-report, and the error is
+/// per-request rather than averaging out, so it compounds over a workload.
+/// It is also always *downward*, the one direction a budget enforcer must
+/// not err in, since it lets real spend run past a configured cap.
+///
+/// 1e12 keeps sub-cent models exact and still counts to ~$18M in a u64
+/// before overflow, far past any single daemon's lifetime spend.
+const PICO_PER_USD: f64 = 1_000_000_000_000.0;
+
+/// Convert USD to pico-dollars, rounding to nearest so repeated small
+/// requests neither systematically under- nor over-count.
+fn usd_to_pico(usd: f64) -> u64 {
+    if !usd.is_finite() || usd <= 0.0 {
+        return 0;
+    }
+    (usd * PICO_PER_USD).round() as u64
+}
+
+fn pico_to_usd(pico: u64) -> f64 {
+    pico as f64 / PICO_PER_USD
+}
+
 /// Daily spend bucket. A mutex rather than atomics because the day index and
 /// the amount must roll over together.
 #[derive(Debug, Default)]
 struct DailySpend {
     day: u64,
-    micro_usd: u64,
+    pico_usd: u64,
 }
 
 #[derive(Debug, Default)]
@@ -20,10 +46,10 @@ pub struct CostLedger {
     requests_local: AtomicU64,
     requests_frontier: AtomicU64,
     cache_hits: AtomicU64,
-    /// Stored as USD * 1e6 (micro-dollars) for atomic counting.
-    spent_micro_usd: AtomicU64,
-    /// USD * 1e6 that routing everything to frontier would have cost.
-    counterfactual_micro_usd: AtomicU64,
+    /// Stored as USD * 1e12 (pico-dollars) for atomic counting.
+    spent_pico_usd: AtomicU64,
+    /// USD * 1e12 that routing everything to frontier would have cost.
+    counterfactual_pico_usd: AtomicU64,
     /// Paid requests with no pricing entry, whose real cost is unknown rather
     /// than zero. Counted separately because reporting them as `$0.00` would
     /// under-report spend — the one lie a cost meter must not tell.
@@ -56,16 +82,16 @@ impl CostLedger {
 
         if let Some(p) = self.pricing.get(model) {
             let cost = p.cost_usd(prompt_tokens, completion_tokens);
-            let micro = (cost * 1_000_000.0) as u64;
-            self.spent_micro_usd.fetch_add(micro, Ordering::Relaxed);
-            self.counterfactual_micro_usd
-                .fetch_add(micro, Ordering::Relaxed);
+            let pico = usd_to_pico(cost);
+            self.spent_pico_usd.fetch_add(pico, Ordering::Relaxed);
+            self.counterfactual_pico_usd
+                .fetch_add(pico, Ordering::Relaxed);
             let mut daily = self.daily.lock();
             if daily.day != day {
                 daily.day = day;
-                daily.micro_usd = 0;
+                daily.pico_usd = 0;
             }
-            daily.micro_usd += micro;
+            daily.pico_usd += pico;
         } else {
             // No published price to encode. Counted so `/stats` can report an
             // uncomputable cost instead of implying the calls were free.
@@ -87,8 +113,8 @@ impl CostLedger {
         if let Some(m) = counterfactual_model {
             if let Some(p) = self.pricing.get(m) {
                 let cost = p.cost_usd(prompt_tokens, completion_tokens);
-                self.counterfactual_micro_usd
-                    .fetch_add((cost * 1_000_000.0) as u64, Ordering::Relaxed);
+                self.counterfactual_pico_usd
+                    .fetch_add(usd_to_pico(cost), Ordering::Relaxed);
             }
         }
     }
@@ -103,8 +129,8 @@ impl CostLedger {
         self.cache_hits.fetch_add(1, Ordering::Relaxed);
         if let Some(p) = self.pricing.get(counterfactual_model) {
             let cost = p.cost_usd(prompt_tokens, completion_tokens);
-            self.counterfactual_micro_usd
-                .fetch_add((cost * 1_000_000.0) as u64, Ordering::Relaxed);
+            self.counterfactual_pico_usd
+                .fetch_add(usd_to_pico(cost), Ordering::Relaxed);
         }
     }
 
@@ -117,16 +143,15 @@ impl CostLedger {
     fn spent_today_usd_at(&self, day: u64) -> f64 {
         let daily = self.daily.lock();
         if daily.day == day {
-            daily.micro_usd as f64 / 1_000_000.0
+            pico_to_usd(daily.pico_usd)
         } else {
             0.0
         }
     }
 
     pub fn snapshot(&self) -> CostSnapshot {
-        let spent = self.spent_micro_usd.load(Ordering::Relaxed) as f64 / 1_000_000.0;
-        let counterfactual =
-            self.counterfactual_micro_usd.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let spent = pico_to_usd(self.spent_pico_usd.load(Ordering::Relaxed));
+        let counterfactual = pico_to_usd(self.counterfactual_pico_usd.load(Ordering::Relaxed));
         CostSnapshot {
             requests_total: self.requests_total.load(Ordering::Relaxed),
             requests_local: self.requests_local.load(Ordering::Relaxed),
@@ -206,6 +231,101 @@ mod tests {
         assert_eq!(s.requests_frontier, 1);
         assert!((s.spent_usd - 0.0175).abs() < 1e-6);
         assert!((s.saved_usd).abs() < 1e-6);
+    }
+
+    /// Regression: sub-micro-dollar costs were truncated to micro-dollar
+    /// granularity, under-reporting spend by up to 26% on cheap models.
+    ///
+    /// The numbers are a real gpt-4o-mini call captured against the live
+    /// OpenAI API: 14 prompt + 1 completion token at $0.15/$0.60 per 1M is
+    /// $0.0000027, which the old `as u64` micro-dollar cast reported as
+    /// $0.000002.
+    #[test]
+    fn sub_micro_dollar_cost_is_not_truncated() {
+        let l = CostLedger::new(PricingTable::canonical());
+        l.record_paid("gpt-4o-mini", 14, 1);
+        let s = l.snapshot();
+        let expected = 14.0 / 1e6 * 0.15 + 1.0 / 1e6 * 0.60; // $0.0000027
+        assert!(
+            (s.spent_usd - expected).abs() < 1e-15,
+            "expected ${expected:.12}, got ${:.12}",
+            s.spent_usd
+        );
+        assert!(
+            s.spent_usd > 0.0000025,
+            "must not truncate to $0.000002, got ${:.12}",
+            s.spent_usd
+        );
+    }
+
+    /// The truncation error was per-request, so it compounded rather than
+    /// averaging out: 1000 identical cheap calls lost ~26% of real spend.
+    #[test]
+    fn repeated_cheap_requests_do_not_accumulate_rounding_drift() {
+        let l = CostLedger::new(PricingTable::canonical());
+        for _ in 0..1_000 {
+            l.record_paid("gpt-4o-mini", 14, 1);
+        }
+        let expected = 1_000.0 * (14.0 / 1e6 * 0.15 + 1.0 / 1e6 * 0.60); // $0.0027
+        let s = l.snapshot();
+        assert!(
+            (s.spent_usd - expected).abs() < 1e-9,
+            "expected ${expected:.9}, got ${:.9}",
+            s.spent_usd
+        );
+        assert!((l.spent_today_usd() - expected).abs() < 1e-9);
+    }
+
+    /// A request too cheap to register in micro-dollars must still count.
+    /// Under truncation this recorded exactly $0, making arbitrarily many
+    /// such calls look free.
+    #[test]
+    fn very_cheap_request_is_not_recorded_as_free() {
+        let l = CostLedger::new(PricingTable::canonical());
+        // $0.03/M input: a single input token is $0.00000003.
+        l.record_paid("deepinfra-llama3.1-8b", 1, 0);
+        let s = l.snapshot();
+        assert!(
+            s.spent_usd > 0.0,
+            "a priced request must never record as $0.00"
+        );
+        assert!((s.spent_usd - 0.03 / 1e6).abs() < 1e-15);
+    }
+
+    /// Counterfactual savings used the same truncating cast, so reported
+    /// savings were understated for cheap counterfactual models.
+    #[test]
+    fn counterfactual_savings_keep_sub_micro_precision() {
+        let l = CostLedger::new(PricingTable::canonical());
+        l.record_free(Some("gpt-4o-mini"), 14, 1);
+        let expected = 14.0 / 1e6 * 0.15 + 1.0 / 1e6 * 0.60;
+        let s = l.snapshot();
+        assert!((s.saved_usd - expected).abs() < 1e-15);
+        assert!((s.counterfactual_usd - expected).abs() < 1e-15);
+
+        let l2 = CostLedger::new(PricingTable::canonical());
+        l2.record_cache_hit("gpt-4o-mini", 14, 1);
+        assert!((l2.snapshot().saved_usd - expected).abs() < 1e-15);
+    }
+
+    /// A budget just above one request's true cost must trip on the second
+    /// request. Truncation made spend accrue slower than reality, so an
+    /// enforced cap could be crossed without the ledger noticing.
+    #[test]
+    fn tiny_budget_trips_on_true_cost_not_truncated_cost() {
+        let l = CostLedger::new(PricingTable::canonical());
+        let one = 14.0 / 1e6 * 0.15 + 1.0 / 1e6 * 0.60; // $0.0000027
+        let day = utc_day_index();
+        l.record_paid_at(day, "gpt-4o-mini", 14, 1);
+        l.record_paid_at(day, "gpt-4o-mini", 14, 1);
+
+        // Limit sits between one and two requests' true cost.
+        let st = BudgetStatus::evaluate(&budget(Some(one * 1.5), None, true), &l.snapshot());
+        assert!(
+            st.daily_exceeded,
+            "two requests at ${one:.9} each must exceed a ${:.9} daily cap",
+            one * 1.5
+        );
     }
 
     #[test]

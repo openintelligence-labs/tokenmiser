@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The cost ledger truncated every request's cost to whole micro-dollars, so
+  spend was systematically **under-reported**. A real `gpt-4o-mini` call of 14
+  prompt + 1 completion tokens costs $0.0000027 and was recorded as
+  $0.000002 — a 26% under-count. The error was per-request rather than
+  averaging out, so it compounded across a workload, and it was always
+  downward: the one direction a budget enforcer must not err in, since it
+  lets real spend run past a configured cap. Requests cheaper than
+  $0.000001 recorded as exactly $0.00, making arbitrarily many of them look
+  free. Spend is now accumulated in pico-dollars (USD × 1e12) and rounded to
+  nearest, which also fixes the matching under-count in
+  `counterfactual_usd`/`saved_usd`. Found by comparing `/stats` against the
+  provider's own reported `usage` on a live OpenAI call.
+
+### Changed
+
+- README documents which provider adapters are verified against a live API
+  (OpenAI, Ollama) and which are covered by unit tests only (Anthropic).
+
 ## [0.6.0] - 2026-07-31
 
 ### Added
