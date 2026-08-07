@@ -71,7 +71,7 @@ x-tokenmiser-budget: ok | exceeded          (when budget limits are configured)
 | Drop-in proxy | OpenAI-compatible `/v1/chat/completions` + `/v1/models`, streaming (SSE) and non-streaming, built on Pingora |
 | Tiered router | Tier 0 heuristics → Tier 1 semantic classifier → Tier 2 speculative cascade |
 | Dual-layer cache | L1 exact-match + L2 semantic (bge-small embeddings, cosine ≥ 0.87); streamed responses cached too, hits replay as streams |
-| Provider adapters | OpenAI, Anthropic, Ollama — plus static aliases for anything else |
+| Provider adapters | OpenAI, Anthropic, Ollama — plus static aliases for anything else. The OpenAI and Ollama adapters are verified end-to-end against live APIs; the Anthropic adapter is covered by unit tests only (see [Verification](#verification)) |
 | Cost ledger | Real-time USD spent/saved (lifetime + current UTC day) from a canonical `pricing/pricing.json` |
 | Budget alerts | Optional daily/total USD limits — warn via `/stats` + header + log, or reject paid calls with 402 (`enforce: true`); local traffic always passes |
 | Live dashboard | `/` on the proxy port: savings, cache hit rates, per-route costs |
@@ -184,6 +184,31 @@ rather than reporting `$0.00` (which would read as "free"), those calls
 increment an explicit `unpriced_requests` counter in `/stats` and on the
 dashboard. When it is non-zero, `spent_usd` is a **lower bound** on your real
 bill, and the dashboard says so.
+
+## Verification
+
+The test suite is fully mocked and never calls a paid API. Separately, the
+paid path has been exercised against the **live OpenAI API** (`gpt-4o-mini`),
+end-to-end through the proxy:
+
+- Non-streaming and streaming (SSE) completions return correctly parsed,
+  OpenAI-shaped responses, with unmodeled upstream fields passed through.
+- **Cost accounting matches the provider's own reported `usage`** to the
+  micro-dollar, checked against the published per-token price.
+- Streamed responses are accounted at stream end and cached; the repeat is
+  served from cache at $0.
+- Budget enforcement was confirmed with real spend: warn mode surfaces
+  `x-tokenmiser-budget: exceeded`, and `enforce: true` returns 402 on paid
+  routes while local Ollama traffic and cache hits still pass.
+- The router escalates to the paid provider only when the policy says so; a
+  local-tier request adds no spend.
+- An invalid or absent key produces a clean, OpenAI-shaped `401` with no key
+  material in the response or logs.
+
+**Not yet verified against a live API:** the **Anthropic** adapter, which is
+covered by unit tests only. Gemini and DeepSeek route through the
+OpenAI-compatible adapter but have not been exercised against their own
+endpoints.
 
 ## Roadmap
 
