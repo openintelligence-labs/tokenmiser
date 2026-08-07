@@ -28,16 +28,33 @@ struct Entry {
 pub struct L1Cache {
     inner: Mutex<LruCache<String, Entry>>,
     ttl: Duration,
+    /// When false every lookup misses and every insert is dropped, so the
+    /// cache can be turned off without threading an `Option` through the nine
+    /// call sites in the request path.
+    enabled: bool,
     hits: std::sync::atomic::AtomicU64,
     misses: std::sync::atomic::AtomicU64,
 }
 
 impl L1Cache {
     pub fn new(capacity: usize, ttl: Duration) -> Arc<Self> {
+        Self::with_enabled(capacity, ttl, true)
+    }
+
+    /// Build a cache that is present but inert, for `cache.l1_enabled = false`.
+    ///
+    /// A disabled cache still counts misses, so `/stats` distinguishes "turned
+    /// off" from "never asked" rather than reporting no activity at all.
+    pub fn disabled(ttl: Duration) -> Arc<Self> {
+        Self::with_enabled(1, ttl, false)
+    }
+
+    fn with_enabled(capacity: usize, ttl: Duration, enabled: bool) -> Arc<Self> {
         let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
         Arc::new(Self {
             inner: Mutex::new(LruCache::new(cap)),
             ttl,
+            enabled,
             hits: Default::default(),
             misses: Default::default(),
         })
@@ -49,6 +66,11 @@ impl L1Cache {
     /// `hits + misses == lookups` always holds. Callers must not count misses
     /// themselves.
     pub fn lookup(&self, req: &ChatRequest, tenant: &str) -> Option<ChatResponse> {
+        if !self.enabled {
+            self.misses
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        }
         let k = exact_key(req, tenant);
         let mut guard = self.inner.lock();
         let found = match guard.get(&k) {
@@ -75,6 +97,9 @@ impl L1Cache {
     }
 
     pub fn insert(&self, req: &ChatRequest, tenant: &str, resp: &ChatResponse) {
+        if !self.enabled {
+            return;
+        }
         let k = exact_key(req, tenant);
         let mut guard = self.inner.lock();
         guard.put(
@@ -224,5 +249,64 @@ mod tests {
             "hits+misses must equal total lookups under concurrency"
         );
         assert!(s.size <= 50);
+    }
+
+    #[test]
+    fn disabled_cache_stores_nothing() {
+        // Regression: `cache.l1_enabled` was parsed and ignored entirely, so
+        // setting it to false silently left the cache running.
+        let c = L1Cache::disabled(Duration::from_secs(3600));
+        c.insert(&req("hello"), "t", &resp("world"));
+        assert_eq!(c.stats().size, 0, "a disabled cache stored an entry");
+    }
+
+    #[test]
+    fn disabled_cache_never_serves_a_hit() {
+        let c = L1Cache::disabled(Duration::from_secs(3600));
+        c.insert(&req("hello"), "t", &resp("world"));
+        assert!(c.lookup(&req("hello"), "t").is_none());
+
+        // Misses are still counted, so /stats can distinguish "turned off"
+        // from "never asked".
+        let s = c.stats();
+        assert_eq!((s.hits, s.misses), (0, 1));
+    }
+
+    #[test]
+    fn disabled_cache_ignores_entries_that_are_already_present() {
+        // Isolates the lookup guard. Without this, removing the guard in
+        // `lookup` still passes every test, because the guard in `insert`
+        // means nothing was ever stored to hit.
+        let c = L1Cache::new(16, Duration::from_secs(3600));
+        c.insert(&req("hello"), "t", &resp("world"));
+        assert_eq!(c.stats().size, 1, "precondition: entry is stored");
+
+        // Same populated map, now with the cache switched off.
+        let off = L1Cache::disabled(Duration::from_secs(3600));
+        {
+            let mut guard = off.inner.lock();
+            let k = exact_key(&req("hello"), "t");
+            guard.put(
+                k,
+                Entry {
+                    response: resp("world"),
+                    inserted_at: Instant::now(),
+                },
+            );
+        }
+        assert_eq!(off.stats().size, 1, "precondition: entry is present");
+        assert!(
+            off.lookup(&req("hello"), "t").is_none(),
+            "a disabled cache served an entry that was already in the map"
+        );
+    }
+
+    #[test]
+    fn enabled_cache_still_serves_a_hit() {
+        // Guards the disable path against being applied unconditionally.
+        let c = L1Cache::new(16, Duration::from_secs(3600));
+        c.insert(&req("hello"), "t", &resp("world"));
+        assert!(c.lookup(&req("hello"), "t").is_some());
+        assert_eq!(c.stats().size, 1);
     }
 }

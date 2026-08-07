@@ -172,6 +172,9 @@ pub struct ListenConfig {
     /// Pingora proxy ingress: the LLM-traffic surface.
     pub proxy_addr: String,
     /// Admin ingress: `/stats`, `/healthz`, dashboard.
+    /// Reserved. No listener is bound here yet; `/stats`, `/healthz`, and the
+    /// dashboard are all served on `proxy_addr`. Kept so existing config files
+    /// keep parsing, and still covered by the non-loopback bind warning.
     pub admin_addr: String,
 }
 
@@ -216,9 +219,6 @@ pub struct CacheConfig {
     /// Disable only for workloads that want digit-insensitive matching.
     #[serde(default = "default_true")]
     pub numeric_guard: bool,
-    /// `tenant` | `user` | `session` | `global`
-    #[serde(default = "default_scope")]
-    pub scope: String,
 }
 
 impl Default for CacheConfig {
@@ -228,7 +228,6 @@ impl Default for CacheConfig {
             l2_enabled: true,
             semantic_threshold: default_semantic_threshold(),
             numeric_guard: true,
-            scope: "tenant".into(),
         }
     }
 }
@@ -241,10 +240,6 @@ fn default_semantic_threshold() -> f32 {
     // precision: a false-positive cache hit returns a wrong answer silently.
     0.87
 }
-fn default_scope() -> String {
-    "tenant".into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

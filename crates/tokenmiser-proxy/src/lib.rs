@@ -152,7 +152,11 @@ impl AppState {
         mcp: Arc<McpBudgetGateway>,
     ) -> Arc<Self> {
         // 16k entries at ~10KB average response bounds L1 at roughly 160MB.
-        let l1 = L1Cache::new(16_384, Duration::from_secs(3600));
+        let l1 = if config.cache.l1_enabled {
+            L1Cache::new(16_384, Duration::from_secs(3600))
+        } else {
+            L1Cache::disabled(Duration::from_secs(3600))
+        };
 
         let l2 = if config.cache.l2_enabled {
             match L2Cache::new(
