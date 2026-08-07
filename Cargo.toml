@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/openintelligence-labs/tokenmiser"
@@ -73,14 +73,14 @@ rhai = { version = "1.21", features = ["sync"] }
 clap = { version = "4", features = ["derive"] }
 
 # Internal crates
-tokenmiser-config = { path = "crates/tokenmiser-config", version = "0.6.0" }
-tokenmiser-providers = { path = "crates/tokenmiser-providers", version = "0.6.0" }
-tokenmiser-cache = { path = "crates/tokenmiser-cache", version = "0.6.0" }
-tokenmiser-cost = { path = "crates/tokenmiser-cost", version = "0.6.0" }
-tokenmiser-router = { path = "crates/tokenmiser-router", version = "0.6.0" }
-tokenmiser-proxy = { path = "crates/tokenmiser-proxy", version = "0.6.0" }
-tokenmiser-quality = { path = "crates/tokenmiser-quality", version = "0.6.0" }
-tokenmiser-mcp = { path = "crates/tokenmiser-mcp", version = "0.6.0" }
+tokenmiser-config = { path = "crates/tokenmiser-config", version = "0.6.1" }
+tokenmiser-providers = { path = "crates/tokenmiser-providers", version = "0.6.1" }
+tokenmiser-cache = { path = "crates/tokenmiser-cache", version = "0.6.1" }
+tokenmiser-cost = { path = "crates/tokenmiser-cost", version = "0.6.1" }
+tokenmiser-router = { path = "crates/tokenmiser-router", version = "0.6.1" }
+tokenmiser-proxy = { path = "crates/tokenmiser-proxy", version = "0.6.1" }
+tokenmiser-quality = { path = "crates/tokenmiser-quality", version = "0.6.1" }
+tokenmiser-mcp = { path = "crates/tokenmiser-mcp", version = "0.6.1" }
 
 [profile.release]
 lto = "thin"
